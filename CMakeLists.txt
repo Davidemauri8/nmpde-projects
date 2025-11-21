@@ -30,14 +30,12 @@ else()
 endif()
 
 string(REPLACE "\\" "/" GMSH_EXECUTABLE ${GMSH_EXECUTABLE})
-message(STATUS "${GMSH_EXECUTABLE}")
 execute_process(
     COMMAND "${GMSH_EXECUTABLE}" "--version"
     OUTPUT_VARIABLE GMSH_VERSION
     RESULT_VARIABLE EXEC_RESULT
     OUTPUT_STRIP_TRAILING_WHITESPACE
 )
-message(STATUS ${EXEC_RESULT})
 if (EXEC_RESULT EQUAL 0 AND NOT GMSH_VERSION STREQUAL "")
     message(STATUS "Executable gmsh correctly working with detected version: ${GMSH_VERSION}.")
 else()
@@ -80,8 +78,8 @@ foreach(MESH_ITEM IN LISTS _MESHES)
     endif()
 endforeach()
 
-set(CPP_PATH "src/cpp")
-set(CPP_UTILS "src/cpp/utilities")
+set(CPP_PATH    "src/cpp")
+set(CPP_UTILS   "src/cpp/utilities")
 
 # add_library(visualize STATIC "${CPP_UTILS}/visualize.hpp")
 # deal_ii_setup_target(visualize)

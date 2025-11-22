@@ -71,7 +71,7 @@ foreach(MESH_ITEM IN LISTS _MESHES)
         if (EXEC_RESULT EQUAL 0)
             message(STATUS "Successfully generated mesh ${MESH_ITEM_MSH}")
         else()
-            message(STATUS "Failed to generate mesh ${MESH_ITEM_MSH} when calling   \
+            message(FATAL ERROR "Failed to generate mesh ${MESH_ITEM_MSH} when calling   \
             the gmsh executable. It's possible that the specified mesh script       \
             failed to be parsed by gmsh.")
         endif()

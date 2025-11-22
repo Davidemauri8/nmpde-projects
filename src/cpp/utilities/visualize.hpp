@@ -19,12 +19,14 @@
 
 #include <deal.II/numerics/data_out.h>
  
+#include "../utilities/mesh_io.hpp"
+
 namespace Mesh {
 
 	/* @brief metafunction for generation of a mesh coloring to represent
 	 the domain boundary ids.
 
-	 @param from a path to a mesh .msh file
+	 @param from a path to a mesh .msh file or .vtu file
 	 @param save_into where the mesh coloring is to be saved as a .vtu file
 	 @tparam D the dimension of the mesh
 	*/
@@ -36,13 +38,9 @@ namespace Mesh {
 		) {
 		using namespace dealii;
 
+		// Load the mesh into the triangulation
 		Triangulation<3>	triangulation;
-		GridIn<3>			gridin;
-
-		// Read the mesh file into the helper gridIn class
-		std::ifstream input(from);
-		gridin.attach_triangulation(triangulation);
-		gridin.read_msh(input);
+		Mesh::load_mesh_into_tria(from, triangulation);
 
 		DataOut<3> data_out;
 		data_out.attach_triangulation(triangulation);

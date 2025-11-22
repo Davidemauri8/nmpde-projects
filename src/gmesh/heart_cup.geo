@@ -32,9 +32,9 @@ Physical Volume("Heart") = {1};
 // Notice: the Robin condition is initially set to zero, assuming a completely
 // stress-free condition but, when the implementation allows it, it 
 // shall become a linear constraint.
-Physical Surface(1) = {1};
-Physical Surface(2) = {2};
-Physical Surface(3) = {3};
+Physical Surface("Robin") = {1};
+Physical Surface("Dirichlet") = {2};
+Physical Surface("Neumann") = {3};
 
 Mesh.CharacteristicLengthMax = meshFineness;
 Mesh 3;

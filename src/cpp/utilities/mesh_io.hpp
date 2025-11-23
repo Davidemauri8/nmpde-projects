@@ -14,30 +14,44 @@
 #define as_str(s) #s
 #endif
 
-// A set of output macros to debug and show program run data
-#ifndef pde_out
-#include <ctime>
+#define RED_COLOR "\x1b[0;31m"
+#define GRN_COLOR "\x1b[0;32m"
+#define YEL_COLOR "\x1b[0;33m"
+#define BLU_COLOR "\x1b[0;36m"
+#define COLOR_RESET "\x1b[0m"
 
-std::string __tidy_cur_time() {
-    static char date[24];
-    auto in_time_t = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
-    std::strftime(date, sizeof(date), "%H:%M:%S", std::gmtime(&in_time_t));
-    return date;
-}
+#define FINE_LVL 1
+#define FINER_LVL 2
+#define FINEST_LVL 3
+
+// A set of output macros to debug and show program run data
+#undef pde_out
+#ifndef pde_out
 
 #ifdef PDE_OUT_VERBOSE
-#include <string>
+#pragma message "INFO (NOT an error): PDE_OUT_VERBOSE was defined, so verbose output macros will be generated for this unit."
 #define __FILENAME__ (strrchr(__FILE__, '/') ? strrchr(__FILE__, '/') + 1 : __FILE__)
 
+std::string
+__tidy_cur_time();
+
 // Provide a full specification: [time](file): line.44 |
-#define pde_out(s) std::cout << "[" << __tidy_cur_time() << "]" \
+#define _pde_str_shape(s) "[" << __tidy_cur_time() << "]" \
     << "(" << (__FILENAME__) << ")" << ":" << __LINE__ << " | " << s << std::endl
+
 #else
-#define pde_out(s) std::cout << s << std::endl
+#define _pde_str_shape(s) s << std::endl
 #endif //! PDE_OUT_VERBOSE
+
+#define pde_out(s) std::cout << _pde_str_shape(s)
+#define pde_out_c(s, c) std::cout << c << _pde_str_shape(s) << COLOR_RESET;
+#define pde_out_i(s, i) std::cout << std::string(3 * i, '-') << _pde_str_shape(s)
+#define pde_out_c_i(s, c, i) std::cout << c  << " \'" << std::string(3 * i, '-')  << "> " << _pde_str_shape(s) << COLOR_RESET;
+
 #endif //! pde_out
 
-namespace Mesh {
+
+namespace UtilsMesh {
 
     using namespace dealii;
 
@@ -89,6 +103,6 @@ namespace Mesh {
         return;
     }
 
-} // !namespace Mesh
+} // !namespace UtilsMesh
 
 #endif //! __UTILS_MESH_IO

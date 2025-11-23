@@ -21,7 +21,7 @@
  
 #include "../utilities/mesh_io.hpp"
 
-namespace Mesh {
+namespace UtilsMesh {
 
 	/* @brief metafunction for generation of a mesh coloring to represent
 	 the domain boundary ids.
@@ -40,7 +40,7 @@ namespace Mesh {
 
 		// Load the mesh into the triangulation
 		Triangulation<3>	triangulation;
-		Mesh::load_mesh_into_tria(from, triangulation);
+		UtilsMesh::load_mesh_into_tria(from, triangulation);
 
 		DataOut<3> data_out;
 		data_out.attach_triangulation(triangulation);
@@ -71,6 +71,6 @@ namespace Mesh {
 		return;
 	}
 
-} //! namespace Mesh
+} //! namespace UtilsMesh
 
 #endif //! __UTILS_VISUALIZE

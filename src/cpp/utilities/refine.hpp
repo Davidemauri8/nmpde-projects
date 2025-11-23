@@ -8,7 +8,7 @@
 
 #include <fstream>
 
-namespace Mesh {
+namespace UtilsMesh {
 
     using namespace dealii;
 
@@ -42,6 +42,6 @@ namespace Mesh {
 
     }
 
-} // !namespace Mesh
+} // !namespace UtilsMesh
 
 #endif //! __UTILS_REFINE

@@ -78,12 +78,19 @@ foreach(MESH_ITEM IN LISTS _MESHES)
     endif()
 endforeach()
 
-set(CPP_PATH    "src/cpp")
-set(CPP_UTILS   "src/cpp/utilities")
+set(CPP_PATH        "src/cpp")
+set(CPP_UTILS       "src/cpp/utilities")
+set(CPP_SOLVER      "src/cpp/solver")
 
-# add_library(visualize STATIC "${CPP_UTILS}/visualize.hpp")
-# deal_ii_setup_target(visualize)
+add_library(se_is STATIC "${CPP_SOLVER}/superelastic_isotropic.cpp")
+deal_ii_setup_target(se_is)
+
+add_library(me_io STATIC "${CPP_UTILS}/mesh_io.cpp")
+deal_ii_setup_target(me_io)
 
 add_executable(main "${CPP_PATH}/main.cpp")
-# target_link_libraries(main visualize)
 deal_ii_setup_target(main)
+
+target_link_libraries(main se_is)
+target_link_libraries(main me_io)
+

@@ -9,6 +9,6 @@
 #define is_neumann(id) (id == PDE_NEUMANN)
 #define is_dirichlet(id) (id == PDE_DIRICHLET)
 
-#define not_a_boundary(id) (id != PDE_ROBIN && id != PDE_NEUMANN && id != PDE_DIRICHLET)
-
+#define is_not_a_boundary(id) (id != PDE_ROBIN && id != PDE_NEUMANN && id != PDE_DIRICHLET)
+#define is_a_boundary(id) (!is_not_a_boundary(id))
 #endif //! __SOLVER_BOUNDARIES

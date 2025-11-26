@@ -173,8 +173,9 @@ SuperElasticIsotropicSolver::solve() {
             }
         }
         pde_out_c("Handling surface boundaries", BLU_COLOR);
-        for (unsigned int face_no = 0; face_no < GeometryInfo<dim>::faces_per_cell; ++face_no) {
+        for (unsigned int face_no = 0; face_no < cell->reference_cell().n_faces(); ++face_no) {
             // Check if this face is a boundary
+            pde_out_c("GEOMETRY: FACES PER CELL" << GeometryInfo<dim>::faces_per_cell, RED_COLOR);
             if (cell->face(face_no)->at_boundary() &&
                 is_a_boundary(cell->face(face_no)->boundary_id())) {
                 // IMPORTANT: This reinitializes the mapping for the current 2D face in 3D space.

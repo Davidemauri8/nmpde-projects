@@ -5,13 +5,15 @@
 #include <deal.II/lac/precondition.h>
 #include <deal.II/lac/solver_cg.h>
 #include <deal.II/lac/sparse_matrix.h>
+#include <deal.II/base/tensor.h>
 #include <deal.II/lac/vector.h>
 
 #include <deal.II/numerics/data_out.h>
 #include <deal.II/numerics/matrix_tools.h>
 #include <deal.II/numerics/vector_tools.h>
 
-#include <deal.II/fe/fe_q.h>
+#include <deal.II/fe/fe_values_extractors.h>
+#include <deal.II/fe/fe_system.h>
 
 #include <fstream>
 #include <iostream>
@@ -40,7 +42,7 @@ SuperElasticIsotropicSolver::setup(const std::string& mesh_path) {
         // FE_SimplexP classes (the former is meant for hexahedral elements, the
         // latter for tetrahedra, but they are equivalent in 1D). We use FE_SimplexP
         // here for consistency with the next labs.
-        fe = std::make_unique<FE_SimplexP<dim>>(r);
+        fe = std::make_unique<FESystem<dim>>(FE_SimplexP<dim>(this->r) ^ dim);
 
         pde_out_c_i("Degree = " << fe->degree, YEL_COLOR, 1);
         pde_out_c_i("DoFs per cell = " << fe->dofs_per_cell, YEL_COLOR, 1);
@@ -74,11 +76,13 @@ SuperElasticIsotropicSolver::setup(const std::string& mesh_path) {
     {
 
         pde_out_c("Initializing the sparsity pattern", GRN_COLOR);
-        DynamicSparsityPattern dsp(dof_handler.n_dofs());
-        DoFTools::make_sparsity_pattern(dof_handler, dsp);
-        sparsity_pattern.copy_from(dsp);
+        DynamicSparsityPattern dsp(dof_handler.n_dofs(), dof_handler.n_dofs());
 
+        DoFTools::make_sparsity_pattern(dof_handler, dsp);
+        pde_out_c("Copying the sparsity pattern", GRN_COLOR);
+        sparsity_pattern.copy_from(dsp);
         jacobian.reinit(sparsity_pattern);
+
         pde_out_c_i("Initializing the solution vector", GRN_COLOR, 1);
         solution.reinit(dof_handler.n_dofs());
         nr_rhs_f.reinit(dof_handler.n_dofs());
@@ -89,7 +93,7 @@ void
 SuperElasticIsotropicSolver::solve() {
 
 
-    std::cout << "  Assembling the linear system" << std::endl;
+    pde_out_c("Assembling the linear system", RED_COLOR);
 
     // Number of local DoFs for each element.
     const unsigned int dofs_per_cell = fe->dofs_per_cell;
@@ -130,44 +134,37 @@ SuperElasticIsotropicSolver::solve() {
         un_vec = std::vector< Tensor< 1, dim> >(dim);
     solution = 0.15;
 
+    const FEValuesExtractors::Vector velocities(0);
+
     for (const auto& cell : dof_handler.active_cell_iterators())
     {
         fe_values.reinit(cell);
 
         cell_j_matrix = 0.0;
         cell_nr_rhs = 0.0;
-
-
+        /*
         // 2. Single function call to calculate all gradients at once.
         fe_values.get_function_gradients(
             solution,     // The global solution vector
             grad_u_q      // Output: The calculated gradients at all q-points
-        );
-        if (grad_u_q[0][1][0] != 0.0) {
-            pde_out(grad_u_q[0][0]);
-            pde_out(grad_u_q[0][1]);
-            pde_out(grad_u_q[0][2]);
-            pde_out("*");
+        );*/
 
-        }
         for (unsigned int q = 0; q < n_q; ++q)
         {
             // Here we assemble the local contribution for current cell and
             // current quadrature point, filling the local matrix and vector.
 
             // Here we iterate over *local* DoF indices.
-            for (unsigned int i = 0; i < dofs_per_cell; ++i)
-            {
-                for (unsigned int j = 0; j < dofs_per_cell; ++j)
-                {
-                    /*
-                    cell_j_matrix(i, j) += fe_values.JxW(q) * (
-                        fe_values.shape_grad(i, q).double_contract(
-                            fe_values.shape_grad(j, q)
-                        )
-                    )
-                    */
+            for (const unsigned int i : fe_values.dof_indices()) {
+                for (const unsigned int j : fe_values.dof_indices()) {
+                    
+                    pde_out_c("Computing gradient", RED_COLOR);
 
+                    Tensor<2, dim> t1 = fe_values[velocities].gradient(i, q);
+                    Tensor<2, dim> t2 = fe_values[velocities].gradient(j, q);
+                    pde_out_c(t1, RED_COLOR);
+                    // cell_j_matrix(i, j) += fe_values.JxW(q) *
+                    //     double_contract<0, 1, 0, 1, 2, 2, dim, double, double>(t1, t2);
                 }
                 /*
                 cell_rhs(i) += f_loc *                       //
@@ -175,6 +172,7 @@ SuperElasticIsotropicSolver::solve() {
                     fe_values.JxW(q);*/
             }
         }
+        pde_out_c("Handling surface boundaries", BLU_COLOR);
         for (unsigned int face_no = 0; face_no < GeometryInfo<dim>::faces_per_cell; ++face_no) {
             // Check if this face is a boundary
             if (cell->face(face_no)->at_boundary() &&

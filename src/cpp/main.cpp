@@ -17,7 +17,7 @@ int main() {
 	const std::string save_refined = "generated_meshes/refined_mesh.msh";
 
 	SuperElasticIsotropicSolver seis(
-		p("Lagrange Basis Degree", 2),
+		p("Lagrange Basis Degree", 1),
 		p("p_v internal Neumann pressure", 0.5),
 		p("Robin condition alpha parameter", 1.0),
 		p("Partial derivative of P wrt to F", compute_tensor_from_ref)

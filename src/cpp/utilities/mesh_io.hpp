@@ -48,8 +48,19 @@ __tidy_cur_time();
 #define pde_out_i(s, i) std::cout << std::string(3 * i, '-') << _pde_str_shape(s)
 #define pde_out_c_i(s, c, i) std::cout << c  << " \'" << std::string(3 * i, '-')  << "> " << _pde_str_shape(s) << COLOR_RESET;
 
-#endif //! pde_out
+#ifdef PDE_PROGRESS_BAR
 
+void
+__update_prog(const int p, const int n, const int each, const char* c);
+void
+__terminate_prog();
+
+#define prog_bar_c_every(p, n, each, c) { if (p % each == 0) __update_prog(p, n, each, c); }
+#define prog_bar_c(p, n, c) prog_bar_c_every(p, n, ((unsigned long long) n / 100), c)
+#define end_prog_bar() {  __terminate_prog(); std::cout << COLOR_RESET; }
+#endif
+
+#endif //! pde_out
 
 namespace UtilsMesh {
 

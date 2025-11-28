@@ -13,6 +13,7 @@
 #include <deal.II/fe/fe_values.h>
 
 #include <deal.II/grid/tria.h>
+#include <deal.II/lac/affine_constraints.h>
 
 #include <deal.II/lac/dynamic_sparsity_pattern.h>
 #include <deal.II/lac/sparse_matrix.h>
@@ -32,20 +33,20 @@ class SuperElasticIsotropicSolver {
 public:
 
 	// Fourth order tensor acting on dimxdim matrices
-	typedef dealii::Tensor<2, dim, double> FODTensor;
+	typedef dealii::Tensor<2, dim, double> SODTensor;
+	typedef dealii::Tensor<4, dim, double> FthODTensor;
 
 	SuperElasticIsotropicSolver() = delete;
 
 	SuperElasticIsotropicSolver(
 		const int _r,
 		const double _ch_p,
-		const double _alfa,
-		const std::function<void(FODTensor&)> _depdef
+		const double _alfa
+		// const std::function<FthODTensor(SODTensor&)> _depdef
 	) : 
 		r(_r),
 		ch_p(_ch_p),
-		alfa(_alfa),
-		depdef(_depdef)
+		alfa(_alfa)
 	{ }
 
 	void
@@ -82,9 +83,14 @@ protected:
 	// System solution.
 	dealii::Vector<double> solution;
 
+	dealii::Vector<double> step;
+
+
 	dealii::Vector<double> nr_rhs_f;
 
 	dealii::SparseMatrix<double> jacobian;
+
+	// dealii::AffineConstraints<double> constraints;
 
 	// Polynomial degree.
 	const unsigned int r;
@@ -93,7 +99,9 @@ protected:
 
 	const double alfa;
 
-	const std::function<void(FODTensor&)> depdef;
+	const std::function<FthODTensor(const SODTensor&)> depdef;
+
+
 
 };
 	

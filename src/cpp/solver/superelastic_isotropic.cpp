@@ -26,6 +26,7 @@
 #include <iostream>
 
 #include "superelastic_isotropic.hpp"
+#include "mesh_geometry.hpp"
 #include "boundaries.hpp"
 
 // Uncomment this definition to get verbose output (datetime and code line)
@@ -129,11 +130,43 @@ SuperElasticIsotropicSolver::setup(const std::string& mesh_path) {
 #define FORCE_INLINE inline
 #endif
 FORCE_INLINE
-double pow_m2t(double v) {
+double
+pow_m2t(double v) {
     const double av = (v > 0) ? v : -v;
     const double k = (5 + av) / (1 + 5 * av);
     return (v > 0)? k : -k;
 }
+
+
+FORCE_INLINE
+double
+macaulay(double arg) {
+    return (arg > 0.0) ? arg : 0.0;
+}
+
+template <unsigned int Dim>
+FORCE_INLINE
+Tensor<2, Dim>outer_product(const Tensor<1, Dim> v1, const Tensor<1, Dim> v2) {
+    Tensor<2, Dim> t;
+    t[0][0] = v1[0] * v2[0];
+    t[0][1] = t[1][0] = v1[0] * v2[1];
+    t[0][2] = t[2][0] = v1[0] * v2[2];
+    t[1][1] = v1[1] * v2[1]; 
+    t[1][2] = t[2][1] = v1[1] * v2[2];
+    t[2][2] = v1[2] * v1[2];
+    return t;
+}
+
+typedef struct {
+
+    double i4f;
+    double i4s;
+    double ff0t;
+    double ssot;
+
+} pass_cache_data_t;
+
+#define cache_into(name, expression, inter) const auto name = expression; inter.name = name; 
 
 void
 SuperElasticIsotropicSolver::solve() {
@@ -174,6 +207,11 @@ SuperElasticIsotropicSolver::solve() {
 
     std::vector<Tensor< 2, dim>> grad_u_q(fe_values.n_quadrature_points);
     std::vector<Tensor< 2, dim>> grad_u_q_surf(fe_face_values.n_quadrature_points);
+    std::vector<std::vector<Tensor<1, dim>>> orth_u_q(
+        fe_face_values.n_quadrature_points,
+        std::vector<Tensor< 1, dim>>(3)
+    );
+
     std::vector<Tensor< 1, dim>> val_u_q_surf(fe_face_values.n_quadrature_points);
     std::vector<Tensor< 2, dim>> cof_f_q_surf(fe_face_values.n_quadrature_points);
 
@@ -190,8 +228,17 @@ SuperElasticIsotropicSolver::solve() {
             boundary_values);
     }
 
-    UtilsMesh::view_cartesian_coords(this->mesh, fe, quadrature, "field1.vtu");
+    UtilsMesh::view_cartesian_coords(this->mesh, fe, quadrature, "field_new.vtu");
+    UtilsMesh::visualize_grain_fibers(
+        [this](
+            const dealii::Point<dim>& p, std::vector<dealii::Tensor<1, dim>>& v
+            ) {
+                return this->orthothropic_base_at(p, v, true);
+        },
+        this->mesh, fe, quadrature, "orth_field_new.vtu");
+    UtilsMesh::visualize_wall_depth(this->mesh, "depth.vtu");
 
+    pass_cache_data_t intermediate{ };
 
     solution = 0.0;
     double maxj = 0;
@@ -221,6 +268,7 @@ SuperElasticIsotropicSolver::solve() {
                 grad_u_q      // Output: The calculated gradients at all q-points
             );
 
+
             // Here we iterate over *local* DoF indices.
             for (std::size_t i = 0; i < grad_u_q.size(); ++i) {
                 // Compute F = I + grad u
@@ -232,11 +280,20 @@ SuperElasticIsotropicSolver::solve() {
                 // pde_out(grad_u_q[i]);
             }
 
+            const std::vector<Point<dim>>& pts = fe_values.get_quadrature_points();
+
+            compute_basis_at_quadrature(
+                pts,
+                orth_u_q, false
+            );
+
             for (unsigned int q = 0; q < n_q; ++q)
             {
                 // Here we assemble the local contribution for current cell and
                 // current quadrature point, filling the local matrix and vector.
-
+                const auto C = transpose(grad_u_q[q]) * grad_u_q[q];
+                cache_into( i4f, scalar_product(orth_u_q[q][1], C * orth_u_q[q][1]), intermediate );
+                cache_into( i4s, scalar_product(orth_u_q[q][0], C * orth_u_q[q][0]), intermediate );
 
                 for (const unsigned int i : fe_values.dof_indices()) {
                     const Tensor<2, dim> grad_i = fe_values[displacement].gradient(i, q);
@@ -265,6 +322,15 @@ SuperElasticIsotropicSolver::solve() {
 
                     double bulk_modulus_contribution = scalar_product(
                         (bulk / 2) * (J * J - 1) * Fmt, grad_i) *fe_values.JxW(q);
+
+                    // Contribution of orthotropy 
+                    double orthotropy_s0 = 2 * as * macaulay(i4s - 1) * scalar_product(
+                        outer_product(grad_u_q[q] * orth_u_q[q][0], orth_u_q[q][0]), grad_i) * fe_values.JxW(q);
+                    double orthotropy_f0 = 2 * af * macaulay(i4f - 1) * scalar_product(
+                        outer_product(grad_u_q[q] * orth_u_q[q][1], orth_u_q[q][1]), grad_i) * fe_values.JxW(q);
+
+                    cell_nr_rhs(i) += orthotropy_s0;
+                    cell_nr_rhs(i) += orthotropy_f0;
 
                     cell_nr_rhs(i) += guc_modified_i1_contribution;
                     cell_nr_rhs(i) += bulk_modulus_contribution;
@@ -484,6 +550,7 @@ SuperElasticIsotropicSolver::voigt_apply_to(
             t += (bulk / 2) * (J * J - 1) * m;
 
             // Now account for orthotropy terms...
+            
 
 
             const auto bf = t.begin_raw();
@@ -505,31 +572,51 @@ SuperElasticIsotropicSolver::voigt_apply_to(
     return t;
 }
 
+void
+SuperElasticIsotropicSolver::compute_basis_at_quadrature(
+    const std::vector<Point<dim>>& p,
+    std::vector<std::vector<dealii::Tensor<1, dim>>>& orth_sys, 
+    bool compute_n
+) {
+    for (unsigned int i = 0; i < p.size(); ++i)
+        orthothropic_base_at(p[i], orth_sys[i], compute_n);
+}
+
 void 
 SuperElasticIsotropicSolver::orthothropic_base_at(
-    const dealii::Point<dim>& p, std::vector<dealii::Tensor<1, dim>>& basis
+    const dealii::Point<dim>& p, std::vector<dealii::Tensor<1, dim>>& basis, bool compute_n = false
 ) {
     const double x = p[0];
     const double y = p[1];
     const double z = p[2];
 
-    const double r = std::sqrt(x * x + y * y + z * z);
+    const double csquared = MESH_ELLIPSOID_Z_DEFORMATION * MESH_ELLIPSOID_Z_DEFORMATION;
+    const double cfourthp = csquared * csquared;
+
+    const double r = std::sqrt(x * x + y * y + z * z / cfourthp);
     const double rr = std::sqrt(x * x + y * y);
     // Let s be the radial vector aligned with the collagen sheet. 
     auto& s = basis[0];
-    s[0] = x / r; s[1] = y / r; s[2] = z / r;
-    const double r_over_width = r / 20;
-    const double rads = (r_over_width - 0.5) * (r_over_width - 0.5) * (r_over_width - 0.5) * 8 * 1.03;
+    s[0] = x / r; s[1] = y / r; s[2] = (z/csquared) / r;
+    // FLAG[GEO] 
+    double corrected_radius = std::sqrt(x * x + y * y + z * z / csquared);
+    double r_over_width = (corrected_radius - MESH_ELLIPSOID_SMALL_RADIUS) / (MESH_ELLIPSOID_LARGE_RADIUS-MESH_ELLIPSOID_SMALL_RADIUS) ;
+    r_over_width = (r_over_width < 0) ? 0 : (r_over_width > 1) ? 1 : r_over_width;
 
+    double rads = (r_over_width - 0.5) * (r_over_width - 0.5) * (r_over_width - 0.5) * 8 * 1.03;
+    rads = (r_over_width - 0.5) * 2 * 1.03;
+   
     auto& f = basis[1];
-    f[0] = -y; f[1] = x; f[2] = 0;
+    f[0] = -y / rr; f[1] = x / rr; f[2] = 0;
 
     auto& n = basis[2];
-    n[0] = y * z / rr;  n[1] = -x * z / rr; n[2] = (x * x + y * y) / rr;
+    n = cross_product_3d(f, s);
 
-    f = f * std::cos(-rads) + n * std::sin(-rads);
+    // n[0] = x * z / (rr*r); n[0] = -y * z / (rr*r); n[2] = -(x * x + y * y) / (rr*r);
+    f = f * std::cos(rads) + n * std::sin(rads);
+    if (compute_n)
+        n = cross_product_3d(s, f);
 
-    n = cross_product_3d(s, f);
 }
 
 void

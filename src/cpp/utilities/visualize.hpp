@@ -5,6 +5,7 @@
 #include <iostream>
 #include <fstream>
 #include <cmath>
+#include <functional>
 
 #include <deal.II/grid/tria.h>
 #include <deal.II/grid/tria_accessor.h>
@@ -19,6 +20,7 @@
 
 #include <deal.II/numerics/data_out.h>
  
+#include "../solver/mesh_geometry.hpp"
 #include "../utilities/mesh_io.hpp"
 
 namespace UtilsMesh {
@@ -120,8 +122,113 @@ namespace UtilsMesh {
 		return;
 	}
 
-	template <int D>
-	void visualize_grain_fibers() {
+	template <int D = 3>
+	void visualize_grain_fibers(
+		std::function<void(const dealii::Point<3, double>&, std::vector<dealii::Tensor<1, 3>>&)> f,
+		const Triangulation<D>& triangulation,
+		std::unique_ptr<FiniteElement<D>>& fe,
+		std::unique_ptr<Quadrature<D>>& quadrature,
+		const std::string save_into
+	) {
+		using namespace dealii;
+
+		// Load the mesh into the triangulation
+
+		DataOut<D> data_out;
+		data_out.attach_triangulation(triangulation);
+
+		// FEValues instance. This object allows to compute basis functions, their
+		// derivatives, the reference-to-current element mapping and its
+		// derivatives on all quadrature points of all elements.
+		FEValues<D> fe_values(*fe, *quadrature,
+			update_values | update_gradients | update_quadrature_points |
+			update_JxW_values);
+
+		// Its inelegant but required because dealii stores just a reference to these
+		// vectors when data_out.add_data_vector is called, so they need to be
+		// different memory locations until .build_patches() is called
+		Vector<double> ux(triangulation.n_active_cells());
+		Vector<double> uy(triangulation.n_active_cells());
+		Vector<double> uz(triangulation.n_active_cells());
+		Vector<double> vx(triangulation.n_active_cells());
+		Vector<double> vy(triangulation.n_active_cells());
+		Vector<double> vz(triangulation.n_active_cells());
+		Vector<double> wx(triangulation.n_active_cells());
+		Vector<double> wy(triangulation.n_active_cells());
+		Vector<double> wz(triangulation.n_active_cells());
+
+		std::vector<Tensor<1, D>> orth_basis(D);
+
+		for (const auto& cell : triangulation.active_cell_iterators()) {
+			const auto ci = cell->index();
+			fe_values.reinit(cell);
+			const auto point = cell->center();
+
+			f(point, orth_basis);
+			const auto& u = orth_basis[0];
+			const auto& v = orth_basis[1];
+			const auto& w = orth_basis[2];
+
+			ux[ci] = u[0]; uy[ci] = u[1]; uz[ci] = u[2];
+			vx[ci] = v[0]; vy[ci] = v[1]; vz[ci] = v[2];
+			wx[ci] = w[0]; wy[ci] = w[1]; wz[ci] = w[2];
+
+		}
+
+		const std::vector<Vector<double>> vecs = { ux, uy, uz, vx, vy, vz, wx, wy, wz };
+		const std::vector<std::string> names = { "ux", "uy", "uz", "vx", "vy", "vz", "wx", "wy", "wz" };
+		for (int i = 0; i < 9; ++i)
+			data_out.add_data_vector(vecs[i], names[i]);
+
+		std::ofstream output(save_into);
+		data_out.build_patches();
+		data_out.write_vtu(output);
+	}
+
+
+	template <int D = 3>
+	void visualize_wall_depth(
+		const Triangulation<D>& triangulation,
+		const std::string save_into
+	) {
+		using namespace dealii;
+
+		// Load the mesh into the triangulation
+
+		DataOut<D> data_out;
+		data_out.attach_triangulation(triangulation);
+
+		// FEValues instance. This object allows to compute basis functions, their
+		// derivatives, the reference-to-current element mapping and its
+		// derivatives on all quadrature points of all elements.
+
+		Vector<double> wall_depth(triangulation.n_active_cells());
+
+		for (const auto& cell : triangulation.active_cell_iterators()) {
+			const auto ci = cell->index();
+
+			const auto p = cell->center();
+
+			const double x = p[0];
+			const double y = p[1];
+			const double z = p[2];
+
+			const double csquared = MESH_ELLIPSOID_Z_DEFORMATION * MESH_ELLIPSOID_Z_DEFORMATION;
+
+			const double r = std::sqrt(x * x + y * y + z * z / (csquared* csquared));
+
+			const double r_over_width = 
+				(r - MESH_ELLIPSOID_SMALL_RADIUS) / (MESH_ELLIPSOID_LARGE_RADIUS - MESH_ELLIPSOID_SMALL_RADIUS);
+
+			wall_depth[ci] = r_over_width;
+		}
+
+		data_out.add_data_vector(wall_depth, "wall_depth");
+
+		std::ofstream output(save_into);
+		data_out.build_patches();
+		data_out.write_vtu(output);
+
 
 	}
 

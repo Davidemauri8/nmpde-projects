@@ -73,9 +73,16 @@ protected:
 
 
 	void orthothropic_base_at(
-		const dealii::Point<dim>& p, std::vector<dealii::Tensor<1, dim>>& basis
+		const dealii::Point<dim>& p, std::vector<dealii::Tensor<1, dim>>& basis,
+		bool compute_n
 	);
 
+	void
+		compute_basis_at_quadrature(
+			const std::vector<dealii::Point<dim>>& p,
+			std::vector<std::vector<dealii::Tensor<1, dim>>>& orth_sys,
+			bool compute_n
+		);
 
 	void compute_rh_s_newt_raphs(dealii::Vector<double>& put);
 

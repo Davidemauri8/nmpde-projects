@@ -1,9 +1,15 @@
 #pragma once
 #ifndef __SOLVER_BOUNDARIES
 
+/* =========== PREVIOUS MESH VALUES ===========
 #define PDE_ROBIN		2
 #define PDE_DIRICHLET	3
 #define PDE_NEUMANN		4
+*/
+#define PDE_ROBIN		1
+#define PDE_DIRICHLET	2
+#define PDE_NEUMANN		3
+
 
 #define is_robin(id) (id == PDE_ROBIN)
 #define is_neumann(id) (id == PDE_NEUMANN)

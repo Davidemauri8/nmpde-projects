@@ -4,6 +4,9 @@
 #include "solver/superelastic_isotropic.hpp"
 
 #include <deal.II/base/tensor.h>
+#include <deal.II/lac/vector.h>
+
+#include <ctime>
 
 
 
@@ -14,12 +17,15 @@ int main() {
 
 	SuperElasticIsotropicSolver seis(
 		p("Lagrange Basis Degree", 2),
-		p("p_v internal Neumann pressure", 0.8),
-		p("Robin condition alpha parameter", 3)
+		p("p_v internal Neumann pressure", 0.15),
+		p("Robin condition alpha parameter", 0.25),
+		p("Mu value", 0.15),
+		p("Bulk penalty", 0.1),
+		p("Anisotropic Af", 0.5),
+		p("Anisotropic As", 1)
 		// p("Partial derivative of P wrt to F", compute_tensor_from_ref)
 	);
 	seis.setup(save_refined);
 	seis.solve();
-
 #undef p
 }

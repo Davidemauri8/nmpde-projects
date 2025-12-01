@@ -71,6 +71,60 @@ namespace UtilsMesh {
 		return;
 	}
 
+	template <int D>
+	void
+		view_cartesian_coords(
+			const Triangulation<3>& triangulation,
+			std::unique_ptr<FiniteElement<D>>& fe,
+			std::unique_ptr<Quadrature<D>>& quadrature,
+			const std::string save_into
+		) {
+		using namespace dealii;
+
+		// Load the mesh into the triangulation
+
+		DataOut<D> data_out;
+		data_out.attach_triangulation(triangulation);
+
+		// FEValues instance. This object allows to compute basis functions, their
+		// derivatives, the reference-to-current element mapping and its
+		// derivatives on all quadrature points of all elements.
+		FEValues<D> fe_values(*fe, *quadrature,
+			update_values | update_gradients | update_quadrature_points |
+			update_JxW_values);
+
+		Vector<float> x_vec(triangulation.n_active_cells());
+		Vector<float> y_vec(triangulation.n_active_cells());
+		Vector<float> z_vec(triangulation.n_active_cells());
+
+		x_vec = 0.0; y_vec = 0.0; z_vec = 0.0;
+		for (const auto& cell : triangulation.active_cell_iterators()) {
+			const auto ci = cell->index();
+			fe_values.reinit(cell);
+
+			const auto point = cell->center();
+
+			x_vec[ci] = (float)point[0];
+			y_vec[ci] = (float)point[1];
+			z_vec[ci] = (float)point[2];
+		}
+
+		data_out.add_data_vector(x_vec, "x");
+		data_out.add_data_vector(y_vec, "y");
+		data_out.add_data_vector(z_vec, "z");
+
+		std::ofstream output(save_into);
+		data_out.build_patches();
+		data_out.write_vtu(output);
+
+		return;
+	}
+
+	template <int D>
+	void visualize_grain_fibers() {
+
+	}
+
 } //! namespace UtilsMesh
 
 #endif //! __UTILS_VISUALIZE

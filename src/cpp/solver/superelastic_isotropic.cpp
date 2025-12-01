@@ -1,4 +1,5 @@
 
+#include <cmath>
 #include <deal.II/grid/grid_out.h>
 
 #include <deal.II/lac/dynamic_sparsity_pattern.h>
@@ -31,6 +32,7 @@
 #define PDE_OUT_VERBOSE
 #define PDE_PROGRESS_BAR
 
+#include "../utilities/visualize.hpp"
 #include "../utilities/mesh_io.hpp"
 
 using namespace dealii;
@@ -83,10 +85,27 @@ SuperElasticIsotropicSolver::setup(const std::string& mesh_path) {
     // Initialize the linear system.
     {
 
+        constraints.clear();
+        // DoFTools::make_hanging_node_constraints(dof_handler, constraints);
+
+        FEValuesExtractors::Scalar z_axis(2);
+        ComponentMask z_axis_mask = fe->component_mask(z_axis);
+        /*
+        VectorTools::interpolate_boundary_values(
+            dof_handler,
+            types::boundary_id(PDE_DIRICHLET),
+            Functions::ZeroFunction<dim>(dim),
+            constraints,
+            z_axis_mask);
+            */
+        constraints.close();
+
         pde_out_c("Initializing the sparsity pattern", GRN_COLOR);
         DynamicSparsityPattern dsp(dof_handler.n_dofs(), dof_handler.n_dofs());
 
-        DoFTools::make_sparsity_pattern(dof_handler, dsp);
+        DoFTools::make_sparsity_pattern(dof_handler, dsp
+            );
+            //, constraints, true);
         pde_out_c("Copying the sparsity pattern", GRN_COLOR);
         sparsity_pattern.copy_from(dsp);
         jacobian.reinit(sparsity_pattern);
@@ -96,6 +115,24 @@ SuperElasticIsotropicSolver::setup(const std::string& mesh_path) {
         step.reinit(dof_handler.n_dofs());
         nr_rhs_f.reinit(dof_handler.n_dofs());
     }
+}
+
+
+#if defined(_MSC_VER)
+// Microsoft Visual C++ Compiler
+#define FORCE_INLINE __forceinline
+#elif defined(__GNUC__) || defined(__clang__)
+// GCC or Clang
+#define FORCE_INLINE __attribute__((always_inline)) inline
+#else
+// Fallback for other compilers
+#define FORCE_INLINE inline
+#endif
+FORCE_INLINE
+double pow_m2t(double v) {
+    const double av = (v > 0) ? v : -v;
+    const double k = (5 + av) / (1 + 5 * av);
+    return (v > 0)? k : -k;
 }
 
 void
@@ -137,6 +174,7 @@ SuperElasticIsotropicSolver::solve() {
 
     std::vector<Tensor< 2, dim>> grad_u_q(fe_values.n_quadrature_points);
     std::vector<Tensor< 2, dim>> grad_u_q_surf(fe_face_values.n_quadrature_points);
+    std::vector<Tensor< 1, dim>> val_u_q_surf(fe_face_values.n_quadrature_points);
     std::vector<Tensor< 2, dim>> cof_f_q_surf(fe_face_values.n_quadrature_points);
 
     const FEValuesExtractors::Vector displacement(0);
@@ -152,9 +190,12 @@ SuperElasticIsotropicSolver::solve() {
             boundary_values);
     }
 
-    solution = 0.0;
+    UtilsMesh::view_cartesian_coords(this->mesh, fe, quadrature, "field1.vtu");
 
-    for (int ITER_OUT = 0; ITER_OUT < 20; ++ITER_OUT) {
+
+    solution = 0.0;
+    double maxj = 0;
+    for (int ITER_OUT = 0; ITER_OUT < 5; ++ITER_OUT) {
 
         pde_out_c("Step number " << ITER_OUT, YEL_COLOR);
         step     = 0.0;
@@ -180,7 +221,6 @@ SuperElasticIsotropicSolver::solve() {
                 grad_u_q      // Output: The calculated gradients at all q-points
             );
 
-            const double mu = 0.15;
             // Here we iterate over *local* DoF indices.
             for (std::size_t i = 0; i < grad_u_q.size(); ++i) {
                 // Compute F = I + grad u
@@ -188,6 +228,8 @@ SuperElasticIsotropicSolver::solve() {
                 t[0][0] += 1;
                 t[1][1] += 1;
                 t[2][2] += 1;
+                // std::cout << t[0][0] << " " << t[0][1] << " " << t[0][2] << std::endl;
+                // pde_out(grad_u_q[i]);
             }
 
             for (unsigned int q = 0; q < n_q; ++q)
@@ -204,10 +246,28 @@ SuperElasticIsotropicSolver::solve() {
                         const Tensor<2, dim> grad_j = fe_values[displacement].gradient(j, q);
 
                         cell_j_matrix(i, j) += fe_values.JxW(q) *
-                            scalar_product(grad_i, (mu * grad_j));
+                            scalar_product(grad_i, 
+                                /* 
+                                ====================== fully neo-hookean =========================
+                                (mu * grad_j) */
+                                voigt_apply_to(grad_u_q[q], grad_j)
+                            );
                     }
 
-                    cell_nr_rhs(i) += scalar_product(mu * grad_u_q[q], grad_i) * fe_values.JxW(q);
+                    const double J = determinant(grad_u_q[q]);
+                    const auto Fmt = transpose(invert(grad_u_q[q]));
+                    double guc_modified_i1_contribution = scalar_product(
+                        /*
+                        ====================== fully neo-hookean =========================
+                        (mu * grad_u_q[q]) */
+                        mu * pow_m2t(J) * (grad_u_q[q] - (1/3.0)* Fmt)
+                        , grad_i) * fe_values.JxW(q);
+
+                    double bulk_modulus_contribution = scalar_product(
+                        (bulk / 2) * (J * J - 1) * Fmt, grad_i) *fe_values.JxW(q);
+
+                    cell_nr_rhs(i) += guc_modified_i1_contribution;
+                    cell_nr_rhs(i) += bulk_modulus_contribution;
                 }
             }
 
@@ -223,30 +283,42 @@ SuperElasticIsotropicSolver::solve() {
 
                     if (is_robin(id)) {
                     
+                        fe_face_values[displacement].get_function_values(
+                            solution,     // The global solution vector
+                            val_u_q_surf      // Output: The calculated gradients at all q-points
+                        );
+
                         for (unsigned int q = 0; q < bdn_q; ++q)
                         {
-                            for (unsigned int i = 0; i < dofs_per_cell; ++i)
+                            for (unsigned int i = 0; i < dofs_per_cell; ++i) {
+                                const auto phi_i = fe_face_values[displacement].value(i, q);
+
                                 for (unsigned int j = 0; j < dofs_per_cell; ++j) {
-                                    const auto phi_i = fe_face_values[displacement].value(i, q);
                                     const auto phi_j = fe_face_values[displacement].value(j, q);
 
                                     cell_j_matrix(i, j) += fe_values.JxW(q) * scalar_product(phi_i, alfa * phi_j);
                                 }
-                        }
 
-                    
-                    
+                                // Rhs contribution
+
+                                double up = alfa * scalar_product(
+                                    phi_i, val_u_q_surf[q]
+                                ) * fe_values.JxW(q);
+                                cell_nr_rhs(i) += up;
+                            }
+                        }
+                   
                     }
                     // IMPORTANT: This reinitializes the mapping for the current 2D face in 3D space.
                     else if (is_neumann(id)) {
 
+                        cof_f_q_surf.clear();
                         fe_face_values[displacement].get_function_gradients(
                             solution,
                             grad_u_q_surf
                         );
 
                         for (std::size_t i = 0; i < grad_u_q_surf.size(); ++i) {
-                            cof_f_q_surf.clear();
                             // Compute F = I + grad u
                             auto& t = grad_u_q_surf[i];
                             t[0][0] += 1; t[1][1] += 1; t[2][2] += 1;
@@ -264,7 +336,9 @@ SuperElasticIsotropicSolver::solve() {
                         for (unsigned int q = 0; q < bdn_q; ++q)
                         {
                             const auto normal_q = fe_face_values.normal_vector(q);
-                            const auto cofactor = cof_f_q_surf[q] * determinant(f_q_surf[q]);
+                            const auto d = determinant(f_q_surf[q]);
+                            const auto cofactor = cof_f_q_surf[q] * d;
+                            maxj = (d < maxj) ? d : maxj;
                             for (unsigned int i = 0; i < dofs_per_cell; ++i) {
                                 const auto phi_i = fe_face_values[displacement].value(i, q);
                                 for (unsigned int j = 0; j < dofs_per_cell; ++j)
@@ -279,7 +353,17 @@ SuperElasticIsotropicSolver::solve() {
                                         );
 
                                 }
+
+
+                                // RHS contribution
+
+                                double up = ch_p * fe_values.JxW(q) * scalar_product(
+                                    phi_i, cofactor * normal_q
+                                );
+                                cell_nr_rhs(i) += up;
                             }
+
+                           
                         }
                     }
                 }
@@ -294,6 +378,7 @@ SuperElasticIsotropicSolver::solve() {
 
             // Then, we add the local matrix and vector into the corresponding
             // positions of the global matrix and vector.
+
             jacobian.add(dof_indices, cell_j_matrix);
             nr_rhs_f.add(dof_indices, cell_nr_rhs);
 
@@ -315,22 +400,27 @@ SuperElasticIsotropicSolver::solve() {
         // Finally, we modify the linear system to apply the boundary conditions.
         // This replaces the equations for the boundary DoFs with the corresponding
         // u_i = 0 equations.
+
+        
         MatrixTools::apply_boundary_values(
             boundary_values, jacobian, step, nr_rhs_f, false
         );
         
         pde_out_c("L2 Norm of residual: " << nr_rhs_f.l2_norm(), RED_COLOR);
+        pde_out_c("L2 Norm of Jac: " << jacobian.l1_norm(), RED_COLOR);
 
         PreconditionSSOR<SparseMatrix<double> > precondition;
         precondition.initialize(
             jacobian, PreconditionSSOR<SparseMatrix<double>>::AdditionalData(.6));
-
+        
         solver.solve(jacobian, step, nr_rhs_f, precondition);
         pde_out_c(solver_control.last_step() << " GMRES iterations", RED_COLOR);
 
         pde_out_c("L2 Norm: " << step.l2_norm(), RED_COLOR);
+        const double alpha_k = 0.5 + 0.5 * (ITER_OUT) / 5;
+        solution.add(-alpha_k, step);
+        // constraints.distribute(solution);
 
-        solution -= step;
     }
 
 
@@ -348,8 +438,145 @@ SuperElasticIsotropicSolver::solve() {
     // Then, use one of the many write_* methods to write the file in an
     // appropriate format.
     const std::string output_file_name =
-        "outputmesh12.vtk";
+        "fully_guccione.vtk";
     std::ofstream output_file(output_file_name);
     data_out.write_vtk(output_file);
 
 }
+
+constexpr const auto dim = SuperElasticIsotropicSolver::dim;
+
+Tensor<2, dim>
+SuperElasticIsotropicSolver::voigt_apply_to(
+    const Tensor<2, SuperElasticIsotropicSolver::dim> & F, const Tensor <2, SuperElasticIsotropicSolver::dim>& tensor) {
+    Tensor<2, dim> t{ };
+    Tensor<2, dim> m{ };
+
+    FullMatrix<double> voigt_matrix(9, 9);
+    Vector<double> voigt_vec(9);
+    Vector<double> out(9);
+
+    const auto F_inv = invert(F);
+    const auto Fmt = transpose(F_inv);
+    const auto J = determinant(F);
+    const auto Jm2o3 = pow_m2t(J);
+    // pde_out_c("Determinant " << Jm2o3, RED_COLOR);
+    // Here we construct the voigt matrix
+    for (int i = 0; i < 3; ++i)
+        for (int j = 0; j < 3; ++j) {
+
+            // Note: this terms arise from a naive "guccione" law
+            t = F;
+            t -= 0.33333333 * Fmt;
+            t *= Jm2o3 * mu * -0.66666666 * F_inv[j][i];
+            t[i][j] += Jm2o3*mu;
+
+            for (int k = 0; k < 3; ++k)
+                for (int l = 0; l < 3; ++l)
+                    // Notice: we transpose in place by constructing into m[l][k] instead of 
+                    // m[k][j
+                    m[l][k] = -F_inv[k][i] * F_inv[j][l];
+            t += -mu * Jm2o3 * 0.33333333 * m;
+
+            // Now account for bulk modulus terms..
+
+            t += (bulk)*J * J * Fmt;
+            t += (bulk / 2) * (J * J - 1) * m;
+
+            // Now account for orthotropy terms...
+
+
+            const auto bf = t.begin_raw();
+            for (int u = 0; u < 9; ++u)
+                voigt_matrix[3 * i + j][u] = bf[u];
+
+
+
+        }
+
+#define transfer(expr, into) for (int i = 0; i < 3; ++i) for (int j = 0; j < 3; ++j) expr = into;
+
+    transfer(voigt_vec[3 * i + j], tensor[i][j]);
+
+    voigt_matrix.vmult(out, voigt_vec);
+    transfer(t[i][j], out[3 * i + j]);
+
+#undef transfer
+    return t;
+}
+
+void 
+SuperElasticIsotropicSolver::orthothropic_base_at(
+    const dealii::Point<dim>& p, std::vector<dealii::Tensor<1, dim>>& basis
+) {
+    const double x = p[0];
+    const double y = p[1];
+    const double z = p[2];
+
+    const double r = std::sqrt(x * x + y * y + z * z);
+    const double rr = std::sqrt(x * x + y * y);
+    // Let s be the radial vector aligned with the collagen sheet. 
+    auto& s = basis[0];
+    s[0] = x / r; s[1] = y / r; s[2] = z / r;
+    const double r_over_width = r / 20;
+    const double rads = (r_over_width - 0.5) * (r_over_width - 0.5) * (r_over_width - 0.5) * 8 * 1.03;
+
+    auto& f = basis[1];
+    f[0] = -y; f[1] = x; f[2] = 0;
+
+    auto& n = basis[2];
+    n[0] = y * z / rr;  n[1] = -x * z / rr; n[2] = (x * x + y * y) / rr;
+
+    f = f * std::cos(-rads) + n * std::sin(-rads);
+
+    n = cross_product_3d(s, f);
+}
+
+void
+SuperElasticIsotropicSolver::compute_rh_s_newt_raphs(Vector<double>& put) {
+
+    const unsigned int dofs_per_cell = fe->dofs_per_cell;
+    const unsigned int n_q = quadrature->size();
+
+    FEValues<dim> fe_values(*fe, *quadrature,
+        update_values | update_gradients | update_quadrature_points |
+        update_JxW_values);
+
+    Vector<double>     cell_nr_rhs(dofs_per_cell);
+
+    std::vector<types::global_dof_index> dof_indices(dofs_per_cell);
+    std::vector<Tensor< 2, dim>> grad_u_q(fe_values.n_quadrature_points);
+
+    const FEValuesExtractors::Vector displacement(0);
+
+    put = 0.0;
+    for (const auto& cell : dof_handler.active_cell_iterators()) {
+        fe_values.reinit(cell);
+
+        fe_values[displacement].get_function_gradients(
+            solution,     // The global solution vector
+            grad_u_q      // Output: The calculated gradients at all q-points
+        );
+
+        // Here we iterate over *local* DoF indices.
+        for (std::size_t i = 0; i < grad_u_q.size(); ++i) {
+            // Compute F = I + grad u
+            auto& t = grad_u_q[i];
+            t[0][0] += 1; t[1][1] += 1; t[2][2] += 1;
+        }
+
+        for (unsigned int q = 0; q < n_q; ++q)
+            for (const unsigned int i : fe_values.dof_indices()) {
+                const Tensor<2, dim> grad_i = fe_values[displacement].gradient(i, q);
+                cell_nr_rhs(i) += scalar_product(mu * grad_u_q[q], grad_i) * fe_values.JxW(q);
+            }
+
+        cell->get_dof_indices(dof_indices);
+
+        // Then, we add the local matrix and vector into the corresponding
+        // positions of the global matrix and vector.
+        put.add(dof_indices, cell_nr_rhs);
+    }
+
+}
+ 

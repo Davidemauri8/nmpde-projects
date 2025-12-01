@@ -1,6 +1,10 @@
 cmake_minimum_required(VERSION 3.12.0)
 project(project_title LANGUAGES CXX C)
 
+if (NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Choose the type of build." FORCE)
+endif()
+
 include(find_libs.cmake)
 
 set(_GMSH_EXECUTABLE "$ENV{_GMSH_EXECUTABLE}")
@@ -84,6 +88,11 @@ set(CPP_SOLVER      "src/cpp/solver")
 
 add_library(se_is STATIC "${CPP_SOLVER}/superelastic_isotropic.cpp")
 deal_ii_setup_target(se_is)
+
+target_compile_options(se_is PRIVATE
+    $<$<CONFIG:Release>:-Ofast>
+    $<$<CONFIG:Release>:-march=native>
+)
 
 add_library(me_io STATIC "${CPP_UTILS}/mesh_io.cpp")
 deal_ii_setup_target(me_io)

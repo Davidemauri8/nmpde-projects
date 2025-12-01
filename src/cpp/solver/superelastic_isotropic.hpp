@@ -28,9 +28,9 @@
 
 class SuperElasticIsotropicSolver {
 
-	static constexpr unsigned int dim = 3;
 
 public:
+	static constexpr unsigned int dim = 3;
 
 	// Fourth order tensor acting on dimxdim matrices
 	typedef dealii::Tensor<2, dim, double> SODTensor;
@@ -41,27 +41,45 @@ public:
 	SuperElasticIsotropicSolver(
 		const int _r,
 		const double _ch_p,
-		const double _alfa
+		const double _alfa,
+		const double _mu,
+		const double _bulk,
+		const double _af,
+		const double _as
 		// const std::function<FthODTensor(SODTensor&)> _depdef
-	) : 
+	) :
 		r(_r),
 		ch_p(_ch_p),
-		alfa(_alfa)
+		alfa(_alfa), 
+		mu(_mu),
+		bulk(_bulk),
+		af(_af),
+		as(_as)
 	{ }
 
 	void
-			setup(const std::string& mesh);
+		setup(const std::string& mesh);
 
-	void 
+	void
 		solve();
-	
+
 	void
 		output() const;
 
 protected:
 
-	void
-		build_jacobian();
+	dealii::Tensor<2, dim> voigt_apply_to(
+		const dealii::Tensor<2,dim>&, const dealii::Tensor<2, dim>&);
+
+
+	void orthothropic_base_at(
+		const dealii::Point<dim>& p, std::vector<dealii::Tensor<1, dim>>& basis
+	);
+
+
+	void compute_rh_s_newt_raphs(dealii::Vector<double>& put);
+
+	void build_jacobian();
 
 	// Triangulation.
 	dealii::Triangulation<dim> mesh;
@@ -90,6 +108,8 @@ protected:
 
 	dealii::SparseMatrix<double> jacobian;
 
+	dealii::AffineConstraints<double> constraints;
+
 	// dealii::AffineConstraints<double> constraints;
 
 	// Polynomial degree.
@@ -98,6 +118,14 @@ protected:
 	const double ch_p;
 
 	const double alfa;
+
+	const double mu;
+
+	const double bulk;
+	
+	const double af;
+
+	const double as;
 
 	const std::function<FthODTensor(const SODTensor&)> depdef;
 

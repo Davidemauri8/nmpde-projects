@@ -1,6 +1,9 @@
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED "ON")
 
+# Forces the build type as release. 
+set(CMAKE_BUILD_TYPE "Release")
+
 # Set default build type to Release.
 if(NOT CMAKE_BUILD_TYPE OR "${CMAKE_BUILD_TYPE}" STREQUAL "")
   set(CMAKE_BUILD_TYPE "Release" CACHE STRING "" FORCE)

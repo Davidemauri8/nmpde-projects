@@ -21,7 +21,7 @@
 #include <deal.II/lac/precondition.h>
 #include <deal.II/lac/solver_cg.h>
 
-
+#include <deal.II/lac/sparse_ilu.h>
 #include <fstream>
 #include <iostream>
 
@@ -157,14 +157,8 @@ Tensor<2, Dim>outer_product(const Tensor<1, Dim> v1, const Tensor<1, Dim> v2) {
     return t;
 }
 
-typedef struct {
+constexpr const auto dim = SuperElasticIsotropicSolver::dim;
 
-    double i4f;
-    double i4s;
-    double ff0t;
-    double ssot;
-
-} pass_cache_data_t;
 
 #define cache_into(name, expression, inter) const auto name = expression; inter.name = name; 
 
@@ -208,7 +202,7 @@ SuperElasticIsotropicSolver::solve() {
     std::vector<Tensor< 2, dim>> grad_u_q(fe_values.n_quadrature_points);
     std::vector<Tensor< 2, dim>> grad_u_q_surf(fe_face_values.n_quadrature_points);
     std::vector<std::vector<Tensor<1, dim>>> orth_u_q(
-        fe_face_values.n_quadrature_points,
+        fe_values.n_quadrature_points,
         std::vector<Tensor< 1, dim>>(3)
     );
 
@@ -242,7 +236,7 @@ SuperElasticIsotropicSolver::solve() {
 
     solution = 0.0;
     double maxj = 0;
-    for (int ITER_OUT = 0; ITER_OUT < 5; ++ITER_OUT) {
+    for (int ITER_OUT = 0; ITER_OUT < 10; ++ITER_OUT) {
 
         pde_out_c("Step number " << ITER_OUT, YEL_COLOR);
         step     = 0.0;
@@ -287,6 +281,7 @@ SuperElasticIsotropicSolver::solve() {
                 orth_u_q, false
             );
 
+
             for (unsigned int q = 0; q < n_q; ++q)
             {
                 // Here we assemble the local contribution for current cell and
@@ -295,24 +290,31 @@ SuperElasticIsotropicSolver::solve() {
                 cache_into( i4f, scalar_product(orth_u_q[q][1], C * orth_u_q[q][1]), intermediate );
                 cache_into( i4s, scalar_product(orth_u_q[q][0], C * orth_u_q[q][0]), intermediate );
 
+                const auto ff0t = outer_product(grad_u_q[q] * orth_u_q[q][0], orth_u_q[q][0]); intermediate.ff0t = ff0t;
+                const auto ss0t = outer_product(grad_u_q[q] * orth_u_q[q][1], orth_u_q[q][1]); intermediate.ss0t = ss0t;
+
                 for (const unsigned int i : fe_values.dof_indices()) {
+
                     const Tensor<2, dim> grad_i = fe_values[displacement].gradient(i, q);
 
                     for (const unsigned int j : fe_values.dof_indices()) {
 
                         const Tensor<2, dim> grad_j = fe_values[displacement].gradient(j, q);
+                        Tensor<2, dim> voigt_product;
 
+                        voigt_apply_to(grad_u_q[q], grad_j, voigt_product, intermediate);
                         cell_j_matrix(i, j) += fe_values.JxW(q) *
-                            scalar_product(grad_i, 
-                                /* 
+                            scalar_product(grad_i,
+                                /*
                                 ====================== fully neo-hookean =========================
                                 (mu * grad_j) */
-                                voigt_apply_to(grad_u_q[q], grad_j)
+                                voigt_product
                             );
                     }
 
                     const double J = determinant(grad_u_q[q]);
                     const auto Fmt = transpose(invert(grad_u_q[q]));
+
                     double guc_modified_i1_contribution = scalar_product(
                         /*
                         ====================== fully neo-hookean =========================
@@ -325,9 +327,10 @@ SuperElasticIsotropicSolver::solve() {
 
                     // Contribution of orthotropy 
                     double orthotropy_s0 = 2 * as * macaulay(i4s - 1) * scalar_product(
-                        outer_product(grad_u_q[q] * orth_u_q[q][0], orth_u_q[q][0]), grad_i) * fe_values.JxW(q);
+                        ff0t, grad_i) * fe_values.JxW(q);
                     double orthotropy_f0 = 2 * af * macaulay(i4f - 1) * scalar_product(
-                        outer_product(grad_u_q[q] * orth_u_q[q][1], orth_u_q[q][1]), grad_i) * fe_values.JxW(q);
+                        ss0t, grad_i) * fe_values.JxW(q);
+
 
                     cell_nr_rhs(i) += orthotropy_s0;
                     cell_nr_rhs(i) += orthotropy_f0;
@@ -475,9 +478,10 @@ SuperElasticIsotropicSolver::solve() {
         pde_out_c("L2 Norm of residual: " << nr_rhs_f.l2_norm(), RED_COLOR);
         pde_out_c("L2 Norm of Jac: " << jacobian.l1_norm(), RED_COLOR);
 
-        PreconditionSSOR<SparseMatrix<double> > precondition;
+
+        SparseILU<double> precondition;
         precondition.initialize(
-            jacobian, PreconditionSSOR<SparseMatrix<double>>::AdditionalData(.6));
+            jacobian, SparseILU<double>::AdditionalData());
         
         solver.solve(jacobian, step, nr_rhs_f, precondition);
         pde_out_c(solver_control.last_step() << " GMRES iterations", RED_COLOR);
@@ -504,19 +508,19 @@ SuperElasticIsotropicSolver::solve() {
     // Then, use one of the many write_* methods to write the file in an
     // appropriate format.
     const std::string output_file_name =
-        "fully_guccione.vtk";
+        "ortho.vtk";
     std::ofstream output_file(output_file_name);
     data_out.write_vtk(output_file);
 
 }
 
-constexpr const auto dim = SuperElasticIsotropicSolver::dim;
-
-Tensor<2, dim>
+void
 SuperElasticIsotropicSolver::voigt_apply_to(
-    const Tensor<2, SuperElasticIsotropicSolver::dim> & F, const Tensor <2, SuperElasticIsotropicSolver::dim>& tensor) {
+    const Tensor<2, dim>& F, const Tensor <2, dim>& tensor, Tensor<2, dim>& into,
+    const pass_cache_data_t& intermediate) {
     Tensor<2, dim> t{ };
     Tensor<2, dim> m{ };
+    Tensor<2, dim> reuse{ };
 
     FullMatrix<double> voigt_matrix(9, 9);
     Vector<double> voigt_vec(9);
@@ -526,6 +530,7 @@ SuperElasticIsotropicSolver::voigt_apply_to(
     const auto Fmt = transpose(F_inv);
     const auto J = determinant(F);
     const auto Jm2o3 = pow_m2t(J);
+
     // pde_out_c("Determinant " << Jm2o3, RED_COLOR);
     // Here we construct the voigt matrix
     for (int i = 0; i < 3; ++i)
@@ -551,13 +556,25 @@ SuperElasticIsotropicSolver::voigt_apply_to(
 
             // Now account for orthotropy terms...
             
+            if (intermediate.i4f > 0)
+                t += 2 * af * intermediate.ff0t * intermediate.ff0t;
+            reuse = 0.0;
+            for (int k = 0; k < 3; ++k)
+                 reuse[i][k] = intermediate.ff0t[j][k];
+            t += 2 * af * macaulay(intermediate.i4f) * reuse;
+            
 
+            if (intermediate.i4s > 0)
+                t += 2 * as * intermediate.ss0t * intermediate.ss0t;
+            reuse = 0.0;
+            for (int k = 0; k < 3; ++k)
+               reuse[i][k] = intermediate.ss0t[j][k];
+            t += 2 * as * macaulay(intermediate.i4s) * reuse;
+            
 
             const auto bf = t.begin_raw();
             for (int u = 0; u < 9; ++u)
                 voigt_matrix[3 * i + j][u] = bf[u];
-
-
 
         }
 
@@ -566,10 +583,10 @@ SuperElasticIsotropicSolver::voigt_apply_to(
     transfer(voigt_vec[3 * i + j], tensor[i][j]);
 
     voigt_matrix.vmult(out, voigt_vec);
-    transfer(t[i][j], out[3 * i + j]);
+    transfer(into[i][j], out[3 * i + j]);
 
 #undef transfer
-    return t;
+    return;
 }
 
 void
@@ -578,8 +595,9 @@ SuperElasticIsotropicSolver::compute_basis_at_quadrature(
     std::vector<std::vector<dealii::Tensor<1, dim>>>& orth_sys, 
     bool compute_n
 ) {
-    for (unsigned int i = 0; i < p.size(); ++i)
+    for (unsigned int i = 0; i < p.size(); ++i) {
         orthothropic_base_at(p[i], orth_sys[i], compute_n);
+    }
 }
 
 void 

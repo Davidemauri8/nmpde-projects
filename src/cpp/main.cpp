@@ -20,7 +20,7 @@ int main() {
 	SuperElasticIsotropicSolver seis(
 		p("Lagrange Basis Degree", 2),
 		p("p_v internal Neumann pressure", 0.15),
-		p("Robin condition alpha parameter", 0.25),
+		p("Robin condition alpha parameter", 0.05),
 		p("Mu value", 0.15),
 		p("Bulk penalty", 0.1),
 		p("Anisotropic Af", 0.5),

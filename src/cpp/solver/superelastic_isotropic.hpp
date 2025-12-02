@@ -26,8 +26,8 @@
 
 #include <functional>
 
-class SuperElasticIsotropicSolver {
 
+class SuperElasticIsotropicSolver {
 
 public:
 	static constexpr unsigned int dim = 3;
@@ -68,8 +68,20 @@ public:
 
 protected:
 
-	dealii::Tensor<2, dim> voigt_apply_to(
-		const dealii::Tensor<2,dim>&, const dealii::Tensor<2, dim>&);
+	typedef struct {
+
+		dealii::Tensor<2, dim> ss0t;
+		dealii::Tensor<2, dim> ff0t;
+		double i4f;
+		double i4s;
+
+	} pass_cache_data_t;
+
+	void
+	voigt_apply_to(
+		const dealii::Tensor<2,dim>&, const dealii::Tensor<2, dim>&,
+		dealii::Tensor<2, dim> &into, const pass_cache_data_t&
+	);
 
 
 	void orthothropic_base_at(

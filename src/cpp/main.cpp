@@ -4,12 +4,11 @@
 #include "utilities/visualize.hpp"
 #include "solver/superelastic_isotropic.hpp"
 
-#include <deal.II/base/tensor.h>
-#include <deal.II/lac/vector.h>
 
 #include <ctime>
+#include "solver/derivatives.hpp"
 
-
+using namespace dealii;
 
 int main() {
 
@@ -27,8 +26,12 @@ int main() {
 		p("Anisotropic As", 1)
 		// p("Partial derivative of P wrt to F", compute_tensor_from_ref)
 	);
-	seis.setup(save_refined);
-	UtilsMesh::boundary_view_mapping<3>(save_refined, save_into);
-	seis.solve();
+	// seis.setup(save_refined);
+	// UtilsMesh::boundary_view_mapping<3>(save_refined, save_into);
+	// seis.solve();
+
+
+	Validation::verify_derivative();
+	
 #undef p
 }

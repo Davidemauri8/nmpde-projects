@@ -45,6 +45,7 @@ __tidy_cur_time();
 
 #define pde_out(s) std::cout << _pde_str_shape(s)
 #define pde_out_c(s, c) std::cout << c << _pde_str_shape(s) << COLOR_RESET;
+#define pde_out_c_var(var, c) std::cout << c << _pde_str_shape(#var << ": " << var) << COLOR_RESET;
 #define pde_out_i(s, i) std::cout << std::string(3 * i, '-') << _pde_str_shape(s)
 #define pde_out_c_i(s, c, i) std::cout << c  << " \'" << std::string(3 * i, '-')  << "> " << _pde_str_shape(s) << COLOR_RESET;
 

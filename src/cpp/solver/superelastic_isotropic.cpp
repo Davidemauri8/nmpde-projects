@@ -10,6 +10,7 @@
 #include <deal.II/lac/vector.h>
 #include <deal.II/physics/elasticity/standard_tensors.h>
 
+#include <deal.II/lac/solver_control.h>
 #include <deal.II/numerics/data_out.h>
 #include <deal.II/numerics/matrix_tools.h>
 #include <deal.II/numerics/vector_tools.h>
@@ -35,6 +36,9 @@
 
 #include "../utilities/visualize.hpp"
 #include "../utilities/mesh_io.hpp"
+
+// Model properties, TEMPORARY!
+#define ACTIVE_FORMULATION
 
 using namespace dealii;
 
@@ -87,26 +91,26 @@ SuperElasticIsotropicSolver::setup(const std::string& mesh_path) {
     {
 
         constraints.clear();
-        // DoFTools::make_hanging_node_constraints(dof_handler, constraints);
+        DoFTools::make_hanging_node_constraints(dof_handler, constraints);
 
         FEValuesExtractors::Scalar z_axis(2);
         ComponentMask z_axis_mask = fe->component_mask(z_axis);
-        /*
+        
         VectorTools::interpolate_boundary_values(
             dof_handler,
             types::boundary_id(PDE_DIRICHLET),
             Functions::ZeroFunction<dim>(dim),
             constraints,
             z_axis_mask);
-            */
+            
         constraints.close();
 
         pde_out_c("Initializing the sparsity pattern", GRN_COLOR);
         DynamicSparsityPattern dsp(dof_handler.n_dofs(), dof_handler.n_dofs());
 
         DoFTools::make_sparsity_pattern(dof_handler, dsp
-            );
-            //, constraints, true);
+            
+            , constraints, true);
         pde_out_c("Copying the sparsity pattern", GRN_COLOR);
         sparsity_pattern.copy_from(dsp);
         jacobian.reinit(sparsity_pattern);
@@ -154,6 +158,7 @@ Tensor<2, Dim>outer_product(const Tensor<1, Dim> v1, const Tensor<1, Dim> v2) {
     t[1][1] = v1[1] * v2[1]; 
     t[1][2] = t[2][1] = v1[1] * v2[2];
     t[2][2] = v1[2] * v1[2];
+    t[1][1];
     return t;
 }
 
@@ -234,9 +239,10 @@ SuperElasticIsotropicSolver::solve() {
 
     pass_cache_data_t intermediate{ };
 
-    solution = 0.0;
+    solution = 0.1;
     double maxj = 0;
-    for (int ITER_OUT = 0; ITER_OUT < 10; ++ITER_OUT) {
+#define MAX_ITER_AMT 8
+    for (int ITER_OUT = 0; ITER_OUT < MAX_ITER_AMT; ++ITER_OUT) {
 
         pde_out_c("Step number " << ITER_OUT, YEL_COLOR);
         step     = 0.0;
@@ -448,14 +454,16 @@ SuperElasticIsotropicSolver::solve() {
             // Then, we add the local matrix and vector into the corresponding
             // positions of the global matrix and vector.
 
-            jacobian.add(dof_indices, cell_j_matrix);
-            nr_rhs_f.add(dof_indices, cell_nr_rhs);
+            constraints.distribute_local_to_global(
+                cell_j_matrix, cell_nr_rhs, dof_indices, jacobian, nr_rhs_f);
+            // jacobian.add(dof_indices, cell_j_matrix);
+            // nr_rhs_f.add(dof_indices, cell_nr_rhs);
 
         }
         end_prog_bar();
 
 
-        ReductionControl solver_control(/* maxiter = */ 100,
+        ReductionControl solver_control(/* maxiter = */ 400,
             /* tolerance = */ 1.0e-16,
             /* reduce = */ 1.0e-6);
 
@@ -471,9 +479,9 @@ SuperElasticIsotropicSolver::solve() {
         // u_i = 0 equations.
 
         
-        MatrixTools::apply_boundary_values(
+        /* MatrixTools::apply_boundary_values(
             boundary_values, jacobian, step, nr_rhs_f, false
-        );
+        );*/
         
         pde_out_c("L2 Norm of residual: " << nr_rhs_f.l2_norm(), RED_COLOR);
         pde_out_c("L2 Norm of Jac: " << jacobian.l1_norm(), RED_COLOR);
@@ -481,15 +489,18 @@ SuperElasticIsotropicSolver::solve() {
 
         SparseILU<double> precondition;
         precondition.initialize(
-            jacobian, SparseILU<double>::AdditionalData());
-        
-        solver.solve(jacobian, step, nr_rhs_f, precondition);
-        pde_out_c(solver_control.last_step() << " GMRES iterations", RED_COLOR);
-
+            jacobian, SparseILU<double>::AdditionalData(0, 2));
+        try {
+            solver.solve(jacobian, step, nr_rhs_f, precondition);
+            pde_out_c(solver_control.last_step() << " GMRES iterations", RED_COLOR);
+        }
+        catch (...) {
+            break;
+        }
         pde_out_c("L2 Norm: " << step.l2_norm(), RED_COLOR);
-        const double alpha_k = 0.5 + 0.5 * (ITER_OUT) / 5;
+        const double alpha_k = 0.5 + 0.5 * (ITER_OUT) / MAX_ITER_AMT;
         solution.add(-alpha_k, step);
-        // constraints.distribute(solution);
+        constraints.distribute(solution);
 
     }
 
@@ -508,7 +519,7 @@ SuperElasticIsotropicSolver::solve() {
     // Then, use one of the many write_* methods to write the file in an
     // appropriate format.
     const std::string output_file_name =
-        "ortho.vtk";
+        "ortho_z_2.vtk";
     std::ofstream output_file(output_file_name);
     data_out.write_vtk(output_file);
 
@@ -536,7 +547,7 @@ SuperElasticIsotropicSolver::voigt_apply_to(
     for (int i = 0; i < 3; ++i)
         for (int j = 0; j < 3; ++j) {
 
-            // Note: this terms arise from a naive "guccione" law
+            // Note: this terms arise from  a naive "guccione" law
             t = F;
             t -= 0.33333333 * Fmt;
             t *= Jm2o3 * mu * -0.66666666 * F_inv[j][i];
@@ -570,7 +581,6 @@ SuperElasticIsotropicSolver::voigt_apply_to(
             for (int k = 0; k < 3; ++k)
                reuse[i][k] = intermediate.ss0t[j][k];
             t += 2 * as * macaulay(intermediate.i4s) * reuse;
-            
 
             const auto bf = t.begin_raw();
             for (int u = 0; u < 9; ++u)
@@ -580,6 +590,20 @@ SuperElasticIsotropicSolver::voigt_apply_to(
 
 #define transfer(expr, into) for (int i = 0; i < 3; ++i) for (int j = 0; j < 3; ++j) expr = into;
 
+#ifdef ACTIVE_FORMULATION
+    // WE can no use the voigt matri xcomptued at time step k to compute the 
+    // actuve cirrectuib ti tge voigt matrix
+
+    for (int i = 0; i < 3; ++i)
+        for (int j = 0; j < 3; ++j) {
+            // Initialize data to 
+
+            for (int l = 0; l < 3; ++l) {
+
+            }
+        }
+
+#endif
     transfer(voigt_vec[3 * i + j], tensor[i][j]);
 
     voigt_matrix.vmult(out, voigt_vec);

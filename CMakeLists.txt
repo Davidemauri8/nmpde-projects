@@ -94,6 +94,20 @@ target_compile_options(se_is PRIVATE
     $<$<CONFIG:Release>:-march=native>
 )
 
+set(FIX_INCLUDE_DIR "/usr/include")
+# Get the current include directories for my_target
+get_target_property(current_includes se_is INTERFACE_INCLUDE_DIRECTORIES)
+
+# Check if the directory is already included
+list(FIND current_includes "${FIX_INCLUDE_DIR}" dir_index)
+MESSAGE(current_includes)
+if(dir_index EQUAL -1)
+    message(STATUS "Adding ${FIX_INCLUDE_DIR} to include directories")
+    target_include_directories(se_is PRIVATE ${MY_INCLUDE_DIR})
+else()
+    message(STATUS "${FIX_INCLUDE_DIR} is already in the include directories")
+endif()
+
 add_library(me_io STATIC "${CPP_UTILS}/mesh_io.cpp")
 deal_ii_setup_target(me_io)
 

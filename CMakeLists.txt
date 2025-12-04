@@ -89,7 +89,20 @@ set(CPP_SOLVER      "src/cpp/solver")
 add_library(se_is STATIC "${CPP_SOLVER}/superelastic_isotropic.cpp")
 deal_ii_setup_target(se_is)
 
+add_library(math_util STATIC "${CPP_UTILS}/math.cpp")
+deal_ii_setup_target(math_util)
+
+add_library(se_or STATIC "${CPP_SOLVER}/orthotropic_solver.cpp")
+deal_ii_setup_target(se_or)
+target_link_libraries(se_or math_util)
+
+
 target_compile_options(se_is PRIVATE
+    $<$<CONFIG:Release>:-Ofast>
+    $<$<CONFIG:Release>:-march=native>
+)
+
+target_compile_options(se_or PRIVATE
     $<$<CONFIG:Release>:-Ofast>
     $<$<CONFIG:Release>:-march=native>
 )
@@ -116,3 +129,4 @@ deal_ii_setup_target(main)
 
 target_link_libraries(main se_is)
 target_link_libraries(main me_io)
+target_link_libraries(main se_or)

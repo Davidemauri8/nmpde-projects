@@ -58,8 +58,8 @@ namespace Validation {
 		into = (k_bulk / 2) * (J * J - 1) * Fmt;
 	}
 
-	constexpr const double a = 0.2;
-	constexpr const double b = 0.2;
+	constexpr const double a = 1;
+	constexpr const double b = 1;
 
 	template <int Dim>
 	void piso(
@@ -161,13 +161,13 @@ namespace Validation {
 
 			for (int i = 0; i < 3; ++i)
 				for (int j = 0; j < 3; ++j) {
-					de_pbulk_deF(i, j, test, der);
+					de_piso_deF(i, j, test, der);
 					computed_differential[i][j] = epsilon * tensor_reduce_sum(der);
 				}
-			pbulk(test, Mbefore);
+			piso(test, Mbefore);
 			// After this line test will be incremented by epsilon over all entries
 			tensor_elementwise_summation(test, epsilon);
-			pbulk(test, Mafter);
+			piso(test, Mafter);
 
 			symbolic_differential = Mafter - Mbefore;
 

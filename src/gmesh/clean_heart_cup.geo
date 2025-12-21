@@ -4,7 +4,7 @@ SetFactory("OpenCASCADE");
 pihalf = 1.57097;
 
 localHeartFineness = 0.05;
-meshFineness = 3;
+meshFineness = 4;
 
 // Sphere(1) = {0, 0, 0, epicardiumWallRadius, localHeartFineness};
 

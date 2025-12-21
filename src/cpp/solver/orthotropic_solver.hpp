@@ -24,8 +24,6 @@
 #include <deal.II/numerics/matrix_tools.h>
 #include <deal.II/numerics/vector_tools.h>
 
-#include <functional>
-
 using namespace dealii;
 
 class SuperElasticOrthotropicSolver {
@@ -40,23 +38,32 @@ public:
 
 	SuperElasticOrthotropicSolver(
 		const int _r,
-		const double _ch_p,
+		const double _p_v,
 		const double _alfa,
-		const double _mu,
+		const double _a,
+		const double _b,
 		const double _bulk,
 		const double _af,
+		const double _bf,
 		const double _as,
-		const double _asf
+		const double _bs,
+		const double _asf,
+		const double _bsf
 		// const std::function<FthODTensor(SODTensor&)> _depdef
 	) :
-		r(_r),
-		ch_p(_ch_p),
+		r_deg(_r),
+		p_v(_p_v),
 		alfa(_alfa),
-		mu(_mu),
+		a(_a),
+		b(_b),
 		bulk(_bulk),
 		af(_af),
+		bf(_bf),
 		as(_as),
-		asf(_asf)
+		bs(_bs),
+		asf(_asf),
+		bsf(_bsf),
+		deP_deF_at_q(dim*dim)
 	{ }
 
 	void setup(const std::string& mesh);
@@ -65,22 +72,45 @@ public:
 
 	void output() const;
 
-protected:
-
 	typedef struct {
 
 		Tensor<2, dim> ss0t;
 		Tensor<2, dim> ff0t;
+		Tensor<1, dim> s0;
+		Tensor<1, dim> f0;
+		Tensor<2, dim> Fmt;
+		Tensor<2, dim> Finv;
+
 		double i4f;
 		double i4s;
+		double J;
+		double I1;
+		double exp_bi1m3;
+		double exp_mac_s_sq;
+		double exp_mac_f_sq;
 
 	} pass_cache_data_t;
 
+
+protected:
+
+	void 
+	compute_deP_deF_at_q(
+		const Tensor<2, dim>& F_q, const pass_cache_data_t& intermediate
+	);
+
 	void
 	voigt_apply_to(
-		const Tensor<2, dim>&, const Tensor<2, dim>&,
+		const Tensor<2, dim>& at, const Tensor<2, dim>& multiply_by,
 		Tensor<2, dim>& into, const pass_cache_data_t&
 	);
+
+	void
+		voigt_apply_to_batch(
+			const Tensor<2, dim>& F, const Tensor <2, dim>& left_hand,
+			const std::vector<Tensor<2, dim>>& right_hand,
+			const pass_cache_data_t& intermediate,
+			Vector<double>& save_into);
 
 	void 
 	orthothropic_base_at(
@@ -97,7 +127,7 @@ protected:
 
 	void compute_rh_s_newt_raphs();
 
-	void build_system();
+	void build_system(bool build_jacobian = true);
 
 	// Triangulation.
 	Triangulation<dim> mesh;
@@ -128,23 +158,31 @@ protected:
 	AffineConstraints<double> constraints;
 
 	// Polynomial degree.
-	const unsigned int r;
+	const unsigned int r_deg;
 
-	const double ch_p;
+	const double p_v;
 
 	const double alfa;
 
-	const double mu;
+	const double a;
+	const double b;
 
 	const double bulk;
 
 	const double af;
+	const double bf;
 
 	const double as;
+	const double bs;
 
 	const double asf;
+	const double bsf;
+
+	std::vector<Tensor<2, dim>> deP_deF_at_q;
+
 
 };
+
 
 
 #endif // !__SOLVER_SUPERELASTIC_ISOTROPIC

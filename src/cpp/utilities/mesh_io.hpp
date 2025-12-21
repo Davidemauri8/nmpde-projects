@@ -45,7 +45,9 @@ __tidy_cur_time();
 
 #define pde_out(s) std::cout << _pde_str_shape(s)
 #define pde_out_c(s, c) std::cout << c << _pde_str_shape(s) << COLOR_RESET;
+#define pde_out_c_par(out, s, c) out << c << _pde_str_shape(s) << COLOR_RESET;
 #define pde_out_c_var(var, c) std::cout << c << _pde_str_shape(#var << ": " << var) << COLOR_RESET;
+#define pde_out_c_v_par(out, var, c) out << c << _pde_str_shape(#var << ": " << var) << COLOR_RESET;
 #define pde_out_i(s, i) std::cout << std::string(3 * i, '-') << _pde_str_shape(s)
 #define pde_out_c_i(s, c, i) std::cout << c  << " \'" << std::string(3 * i, '-')  << "> " << _pde_str_shape(s) << COLOR_RESET;
 
@@ -57,7 +59,7 @@ void
 __terminate_prog();
 
 #define prog_bar_c_every(p, n, each, c) { if (p % each == 0) __update_prog(p, n, each, c); }
-#define prog_bar_c(p, n, c) prog_bar_c_every(p, n, ((unsigned long long) n / 100), c)
+#define prog_bar_c(p, n, c) prog_bar_c_every(p, n, ((unsigned long long) n / 75), c)
 #define end_prog_bar() {  __terminate_prog(); std::cout << COLOR_RESET; }
 #endif
 

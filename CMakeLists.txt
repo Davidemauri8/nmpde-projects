@@ -96,6 +96,9 @@ add_library(se_or STATIC "${CPP_SOLVER}/orthotropic_solver.cpp")
 deal_ii_setup_target(se_or)
 target_link_libraries(se_or math_util)
 
+add_library(reb_or STATIC "${CPP_SOLVER}/rebuild.cpp")
+deal_ii_setup_target(reb_or)
+target_link_libraries(reb_or math_util)
 
 target_compile_options(se_is PRIVATE
     $<$<CONFIG:Release>:-Ofast>
@@ -128,5 +131,6 @@ add_executable(main "${CPP_PATH}/main.cpp")
 deal_ii_setup_target(main)
 
 target_link_libraries(main se_is)
+target_link_libraries(main reb_or)
 target_link_libraries(main me_io)
 target_link_libraries(main se_or)

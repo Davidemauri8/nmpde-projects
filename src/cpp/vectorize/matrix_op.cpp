@@ -1,19 +1,5 @@
 #include "immintrin.h"
 
-#ifndef FORCE_INLINE
-#if defined(_MSC_VER)
-// Microsoft Visual C++ Compiler
-#define FORCE_INLINE __forceinline
-#elif defined(__GNUC__) || defined(__clang__)
-// GCC or Clang
-#define FORCE_INLINE __attribute__((always_inline)) inline
-#else
-// Fallback for other compilers
-#define FORCE_INLINE inline
-#endif
-#endif
-
-
 FORCE_INLINE
 void 
 do_voigt_product(
@@ -54,3 +40,4 @@ do_voigt_product(
     }
     return;
 }
+

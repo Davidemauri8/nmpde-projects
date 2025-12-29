@@ -78,18 +78,18 @@ public:
 		bsf(_bsf),
 		Sn(_Sn),
 		beta(_beta),
-		bulk(_bulk), deP_deF_at_q(dim*dim),
+		bulk(_bulk),
 		mpi_size(Utilities::MPI::n_mpi_processes(MPI_COMM_WORLD)),
 		mpi_rank(Utilities::MPI::this_mpi_process(MPI_COMM_WORLD)),
 		mesh(MPI_COMM_WORLD),
-		pcout(std::cout, mpi_rank == 0)
+		pcout(std::cout, mpi_rank == 0), deP_deF_at_q(dim*dim)
 	{ }
 
 	void
 		setup(const std::string& mesh);
 
 	void
-		solve();
+		solve(const std::string&);
 
 	void
 		output() const;
@@ -145,6 +145,9 @@ protected:
 			const Point<dim>& p, std::vector<Tensor<1, dim>>& basis, bool compute_n = false
 		);
 
+	double compute_internal_volume( );
+
+	double compute_external_volume( );
 
 	double
 		active_phi(const double i4);
@@ -153,6 +156,33 @@ protected:
 		active_phi_prime(const double i4);
 
 
+	const unsigned int r_deg;
+
+	double p_v;
+
+	const double alfa;
+
+	const double a;
+
+	const double b;
+
+	const double af;
+
+	const double bf;
+
+	const double as;
+
+	const double bs;
+
+	const double asf;
+
+	const double bsf;
+
+	const double Sn;
+
+	const double beta; 
+
+	double bulk;
 	// Number of MPI processes.
 	const unsigned int mpi_size;
 
@@ -190,38 +220,11 @@ protected:
 
 	dealii::AffineConstraints<double> constraints;
 
-	const unsigned int r_deg;
-
-	double p_v;
-
-	const double alfa;
-
-	const double a;
-
-	const double b;
-
-	const double af;
-
-	const double bf;
-
-	const double as;
-
-	const double bs;
-
-	const double asf;
-
-	const double bsf;
-
-	const double Sn;
-
-	const double beta; 
-
-	double bulk;
+	ConditionalOStream pcout;
 
 	std::vector<Tensor<2, dim>> deP_deF_at_q;
 	Tensor<2, dim> P_at_q;
 
-	ConditionalOStream pcout;
 };
 
 

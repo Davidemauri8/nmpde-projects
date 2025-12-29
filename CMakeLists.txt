@@ -25,7 +25,7 @@ if (NOT GMSH_EXECUTABLE)
     message(FATAL_ERROR "Required program 'gmsh' not found was not found.        \
     Add gmsh to your default INCLUDE or set the _GMSH_EXECUTABLE with the        \
     path to the folder containing the gmsh executable through                    \
-    export _GMSH_EXECUTABLE=<path/to/exe/> .                                     \
+    export _GMSH_EXECUTABLE=<path/to/FOLDER/containing exe/> .                   \
     (As a side note, the search may fail if you are using a different subsystem  \
     e.g. WSL, so that the path may not be visible. Also note that a windows      \ 
     executable may not be used for a WSL subsystem)")
@@ -96,7 +96,7 @@ add_library(se_or STATIC "${CPP_SOLVER}/orthotropic_solver.cpp")
 deal_ii_setup_target(se_or)
 target_link_libraries(se_or math_util)
 
-add_library(reb_or STATIC "${CPP_SOLVER}/rebuild.cpp")
+add_library(reb_or STATIC "${CPP_SOLVER}/complete_solver.cpp")
 deal_ii_setup_target(reb_or)
 target_link_libraries(reb_or math_util)
 

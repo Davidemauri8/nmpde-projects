@@ -35,7 +35,7 @@
 #include <functional>
 
 
-#include "rebuild.hpp"
+#include "complete_solver.hpp"
 #include "mesh_geometry.hpp"
 #include "boundaries.hpp"
 
@@ -127,10 +127,6 @@ OrthotropicSolver::setup(
         jacobian.reinit(sparsity);
 
         pde_out_c_par(pcout, "Initializing the solution vector", GRN_COLOR);
-        // solution_owned.     reinit(locally_owned_dofs, MPI_COMM_WORLD);
-        // step.               reinit(locally_owned_dofs, MPI_COMM_WORLD);
-        // nr_rhs_f.           reinit(locally_owned_dofs, MPI_COMM_WORLD);
-        // line_search_temp.   reinit(locally_owned_dofs, MPI_COMM_WORLD);
 
         nr_rhs_f.reinit(locally_owned_dofs, MPI_COMM_WORLD);
         solution_owned.reinit(locally_owned_dofs, MPI_COMM_WORLD);
@@ -157,12 +153,15 @@ OrthotropicSolver::setup(
 
         constraints.close();
     }
+
+    solution = 0.0;
+
 }
 
 constexpr const auto dim = OrthotropicSolver::dim;
 
 void
-OrthotropicSolver::solve() {
+OrthotropicSolver::solve(const std::string& output_file_name) {
 
     const unsigned int dofs_per_cell = fe->dofs_per_cell;
 
@@ -170,7 +169,7 @@ OrthotropicSolver::solve() {
     pde_out_c_par(pcout, "DOFS per Cell " << dofs_per_cell, RED_COLOR);
 
 #define MAX_ITER_AMT 25
-    solution = 0.0;
+    //     solution = 0.0;
 
     ReductionControl solver_control(
         key("Max iterations", 5000),
@@ -180,6 +179,8 @@ OrthotropicSolver::solve() {
     SolverGMRES<TrilinosWrappers::MPI::Vector> solver(solver_control);
 
     for (int LOAD_STEPPING = 0; LOAD_STEPPING < 7; LOAD_STEPPING++) {
+        // TODO: (just a little thing) add a break when a given threshold residual
+        // is achieved at each load_stepping step!
         for (unsigned int newton_iter = 0; newton_iter < MAX_ITER_AMT; ++newton_iter) {
 
             const double alpha_k = 0.15 + 0.20 * (newton_iter) / MAX_ITER_AMT;
@@ -200,15 +201,9 @@ OrthotropicSolver::solve() {
                 boundary_values, jacobian, step, nr_rhs_f, false
             ); */
 
-            /*SparseILU<double> precondition;
-            precondition.initialize(
-                jacobian,
-                SparseILU<double>::AdditionalData(0, key("Additional non-zero diags", 5))
-            );*/
             TrilinosWrappers::PreconditionAMG precondition_amg;
             precondition_amg.initialize(jacobian);
-            //PreconditionSSOR<SparseMatrix<double>> precondition;
-            // precondition.initialize(jacobian, 1.2);
+
 
             try {
                 solver.solve(jacobian, step_owned, nr_rhs_f, precondition_amg);
@@ -223,10 +218,6 @@ OrthotropicSolver::solve() {
             pde_out_c_par(pcout, "Complete after " << solver_control.last_step() << " GMRES iterations", RED_COLOR);
             pde_out_c_par(pcout, "L2 Norm of the step: " << step_owned.l2_norm(), RED_COLOR);
 
-            // Now apply line search
-            const double cur_norm = nr_rhs_f.l2_norm();
-            // line_search_temp = solution;
-
             solution_owned.add(-alpha_k, step_owned);
             // A note: in dealii programs the constraint is distributed to the 
             // entire solution, while in 
@@ -236,16 +227,23 @@ OrthotropicSolver::solve() {
             constraints.distribute(solution_owned);
 
             solution = solution_owned;
+            // "false" newton iteration keeping the jacobian fixed, has trivial 
+            // computational cost and aids convergence
             for (int NR = 0; NR < 4; ++NR) {
                 this->build_system(false);
                 solver.solve(jacobian, step_owned, nr_rhs_f, precondition_amg);
                 solution_owned.add(-alpha_k/3, step_owned);
                 constraints.distribute(solution_owned);
                 solution = solution_owned;
-                pde_out_c_par(pcout, "New iteration : " << nr_rhs_f.l2_norm() , RED_COLOR);
+                pde_out_c_par(pcout, "New iteration residual: " << nr_rhs_f.l2_norm() , RED_COLOR);
             }
 
             /*
+            *  This was a previous implementation of line search for the single threaded
+            * implementation of deal-ii.
+            * TODO: adapt this to MPI using distributed vectors and the line search utils
+            * from dealii.
+            * 
             constexpr const double factor = 2;
             while (nr_rhs_f.l2_norm() > cur_norm && lambda > (1 / 128.0)) {
                 pde_out_c("Current res " << nr_rhs_f.l2_norm() << " previous " << cur_norm, BLU_COLOR);
@@ -254,9 +252,7 @@ OrthotropicSolver::solve() {
                 solution.add(-lambda, step);
                 this->build_system(false);
                 pde_out_c("Value of " << lambda * 1.5 << " failed for lambda, attempting " << lambda, RED_COLOR);
-            } */
-
-            /*
+            } 
             if (cur_norm < nr_rhs_f.l2_norm()) {
                 solution = line_search_temp;
                 this->build_system(false);
@@ -277,14 +273,16 @@ OrthotropicSolver::solve() {
                     pde_out_c("Steepest value of " << lambda * 1.5 << " failed for lambda, attempting " << lambda, RED_COLOR);
                 }
             }*/
+
             // At each step, ensure the solution has the right constraints. Use the
             // object oriented version to just limit the z component of the displacement
             // constraints.distribute(solution);
 
         }
+        // Incomplete placeholder for pressure load stepping: 
+        // just sub with max_press - init_press / It_amt
         p_v += 0.10;
-        bulk += 0.03;
-        pde_out_c_par(pcout, "NOW AGAIN!!!", RED_COLOR);
+        pde_out_c_par(pcout, "Repeating the stepping iteration.", RED_COLOR);
     }
 
     pde_out_c_par(pcout, "Completed the newton iteration, saving the result", GRN_COLOR);
@@ -299,7 +297,6 @@ OrthotropicSolver::solve() {
 
     data_out.build_patches();
 
-    const std::string output_file_name = "ortho_z_19_ACTIVE_CONTRACTION.vtk";
     data_out.write_vtu_with_pvtu_record("./",
         output_file_name, 0,
         MPI_COMM_WORLD);
@@ -337,16 +334,19 @@ void OrthotropicSolver::compute_deP_deF_at_q(
     for (int i = 0; i < 3; ++i) {
         for (int j = 0; j < 3; ++j) {
 
+            // Compute the partial derivative of F^-t with respect to F_ij
             for (int k = 0; k < 3; ++k)
                 for (int l = 0; l < 3; ++l)
                     // Notice: we transpose in place by constructing into m[l][k] instead of
                     // m[k][l]
                     m[l][k] = -D.Finv[k][i] * D.Finv[j][l];
 
+            // Contribution of bulk factor
             r = 0.0;
             r += (bulk)*D.J * D.J * D.Fmt * D.Fmt[i][j];
             r += (bulk / 2) * (D.J * D.J - 1) * m;
 
+            // Contribution from the isotropic nonlinear term
             const double nu = 2 * pow_m2t(D.J) * (F_q[i][j] - (1 / 3.0) * D.Fmt[i][j] * D.I1);
             f = (F_q - (1 / 3.0) * D.Fmt) * (b * nu - (2/3.0) *D.Fmt[i][j]);
             f[i][j] += 1;
@@ -355,6 +355,7 @@ void OrthotropicSolver::compute_deP_deF_at_q(
 
             r += f;
 
+            // Contribution from the fibers
             if (D.macf > 0) {
                 r += 4 * af * Ff0f0t[i][j] * D.exp_mac_f_sq * Ff0f0t;
                 r += 8 * af * D.macf * D.macf * bf * Ff0f0t[i][j] * D.exp_mac_f_sq * Ff0f0t;
@@ -362,6 +363,7 @@ void OrthotropicSolver::compute_deP_deF_at_q(
                 f[i][j] = 1.0;
                 r += 2 * af * D.macf * D.exp_mac_f_sq * f * D.f0f0t;
             }
+            // Contribution from the collagen sheets
             if (D.macs > 0) {
                 r += 4 * as * Fs0s0t[i][j] * D.exp_mac_s_sq * Fs0s0t;
                 r += 8 * as * D.macs * D.macs * bs * Fs0s0t[i][j] * D.exp_mac_s_sq * Fs0s0t;
@@ -370,11 +372,13 @@ void OrthotropicSolver::compute_deP_deF_at_q(
                 r += 2 * as * D.macs * D.exp_mac_s_sq * f * D.s0s0t;
             }
 
+            // Cross term for the fibers
             f = 0.0;
             f[i][j] = 1.0;
             r += asf* fs0_plus_sf0 * 2 * f_mix[i][j] * D.exp_bi8sf_sq * (1 + 2 * bsf * D.i8sf * D.i8sf);
             r += asf * D.i8sf * D.exp_bi8sf_sq * f * mixed;
 
+            // Active term
             r += active_phi_prime(D.i4f) * Ff0f0t[i][j] * Ff0f0t + active_phi(D.i4f) * f * D.f0f0t;
 
             for (int l = 0; l < 3; ++l)
@@ -469,8 +473,8 @@ OrthotropicSolver::build_system(bool build_jacobian) {
         jacobian = 0.0;
     nr_rhs_f = 0.0;
 
-    int prog_i = 0;
-    const auto n = this->mesh.n_active_cells();
+    // int prog_i = 0; TO BE USED WHEN ENABLING PROGRESS BARS!
+    // const auto n = this->mesh.n_active_cells();
 
     alignas(cache_line_size()) pass_cache_data_t intermediate {};
 
@@ -581,7 +585,7 @@ OrthotropicSolver::build_system(bool build_jacobian) {
                     val_u_q_surf.clear();
                     fe_face_values[displacement].get_function_values(
                         solution,     // The global solution vector
-                        val_u_q_surf      // Output: The calculated gradients at all q-points
+                        val_u_q_surf      // Output: The calculated function at all q-points
                     );
 
                     for (unsigned int q = 0; q < bdn_q; ++q)
@@ -603,37 +607,6 @@ OrthotropicSolver::build_system(bool build_jacobian) {
                             ) * fe_face_values.JxW(q);
                             cell_nr_rhs(i) += up;
                         }
-                    }
-
-                }
-                else if (is_dirichlet(id)) {
-
-                    for (unsigned int q = 0; q < bdn_q; ++q)
-                    {
-                        const auto normal_q = fe_face_values.normal_vector(q);
-                        auto proj = -outer_product(normal_q, normal_q);
-                        proj[0][0] += 1.0; proj[1][1] += 1.0; proj[2][2] += 1.0;
-
-                        for (unsigned int i = 0; i < dofs_per_cell; ++i) {
-                            const auto phi_i = fe_face_values[displacement].value(i, q);
-                            if (build_jacobian)
-                                for (unsigned int j = 0; j < dofs_per_cell; ++j)
-                                {
-                                    const auto grad_j = fe_face_values[displacement].gradient(j, q);
-
-                                    cell_j_matrix(i, j) += fe_face_values.JxW(q) *
-                                    scalar_product(phi_i,
-                                        proj * tensor_product(deP_deF_at_q, grad_j) * normal_q
-                                    );
-                                }
-
-                            double up = fe_face_values.JxW(q) * scalar_product(
-                                phi_i, proj * P_at_q * normal_q
-                            );
-                            cell_nr_rhs(i) += up;
-                        }
-
-
                     }
 
                 }
@@ -707,6 +680,7 @@ OrthotropicSolver::build_system(bool build_jacobian) {
 
         constraints.distribute_local_to_global(
              cell_j_matrix, cell_nr_rhs, dof_indices, jacobian, nr_rhs_f);
+        // Uncomment this code to use the serial-implementation for the code (dont)
         // constraints.distribute_local_to_global(cell_j_matrix, cell_nr_rhs, dof_indices, jacobian, nr_rhs_f);
         // jacobian.add(dof_indices, cell_j_matrix);
         // nr_rhs_f.add(dof_indices, cell_nr_rhs);
@@ -715,13 +689,26 @@ OrthotropicSolver::build_system(bool build_jacobian) {
     jacobian.compress(VectorOperation::add);
     nr_rhs_f.compress(VectorOperation::add);
 
+    //  Uncomment this code section to apply boundary values in here and not in solve().
     // MatrixTools::apply_boundary_values(
     //    boundary_values, jacobian, step_owned, nr_rhs_f, true);
 
-    // Util macro... ends the progress bar
+    // Util macro... ends the progress bar, cannot be used for parallel program
     // end_prog_bar();
 
 }
+
+double OrthotropicSolver::compute_internal_volume() {
+    // Just use volume integration
+    return 0.0;
+}
+
+double OrthotropicSolver::compute_external_volume() {
+    // TODO: To be done when simulating the pressure cycle, use divergence theorem
+    // on the endocardium
+    return 0.0;
+}
+
 
 void
 OrthotropicSolver::compute_basis_at_quadrature(

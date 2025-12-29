@@ -2,7 +2,7 @@
 #define PDE_OUT_VERBOSE
 #include "utilities/mesh_io.hpp"
 #include "utilities/visualize.hpp"
-#include "solver/rebuild.hpp"
+#include "solver/complete_solver.hpp"
 
 #include <ctime>
 #include "solver/derivatives.hpp"
@@ -17,7 +17,6 @@
 
 void
 parse_params(int argc, char* argv[], std::vector<double>& values) {
-
 	for (int i = 1; i < argc; ++i) {
 		values[i-1] = std::stod(std::string(argv[i]));
 	}
@@ -27,12 +26,19 @@ using namespace dealii;
 
 int main(int argc, char* argv[]) {
 
+	// Parameters for the model are taken in input from the line command
+	// example activation: 
+	//  mpirun -n 4 ./main 2 0.1 0.04 0.3 4.5 4.19 6.5 2.5 10.4 0.130 15.255 2.0 0.5 9.0
+
 	Utilities::MPI::MPI_InitFinalize mpi_init(argc, argv);
+
+	// ENABLE ALL EXCEPTIONS FOR NAN GENERATION TO SEE WHERE THINGS GO ROGUE
 	feenableexcept(FE_DIVBYZERO | FE_INVALID | FE_OVERFLOW);
 
 	std::vector<double> vals(100);
 	parse_params(argc, argv, vals);
 
+	// Show the name, a reference value and the real value taken as line argument
 #define p(s1, def, s) s
 
 	const std::string save_refined = "generated_meshes/clean_heart_cup.msh";
@@ -57,7 +63,7 @@ int main(int argc, char* argv[]) {
 
 	seis.setup(save_refined);
 	// UtilsMesh::boundary_view_mapping<3>(save_refined, save_into);
-	seis.solve();
+	seis.solve("ortho_z_19_ACTIVE_CONTRACTION_2.vtk");
 	
 #undef p
 }

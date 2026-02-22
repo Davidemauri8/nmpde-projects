@@ -58,7 +58,7 @@ void NeoHookeSolver::setup() {
   {
     pde_out_c_par(pcout, "  Initializing the finite element space", RED_COLOR);
 
-    FE_SimplexP<dim> fe_scalar(r);
+    FE_Q<dim> fe_scalar(r);
     fe = std::make_unique<FESystem<dim>>(fe_scalar, dim);
 
     pde_out_c_par(pcout, "  Degree = " << r, RED_COLOR);
@@ -205,7 +205,7 @@ void NeoHookeSolver::assemble_system() {
           Physics::Elasticity::Kinematics::F(solution_gradient_loc[q]);
       //-------------Computing and
       //caching--------------------------------------------
-      compute_and_cache(Finv, invert(F), intermediate);
+      compute_and_cache(Finv, invert(transpose(F), intermediate);
       compute_and_cache(J, determinant(F), intermediate);
       //--------------------------------------------------------------------------------
 

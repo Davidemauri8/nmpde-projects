@@ -129,14 +129,6 @@ void NeoHookeSolver::setup(const std::string &mesh_path) {
 
 void NeoHookeSolver::compute_P_at_q(const Tensor<2, dim, ADNumber> &F_q,
                                     const pass_cache_data_t &i) {
-  /*
-   for (unsigned int a = 0; a < dim; ++a) {
-    for (unsigned int b = 0; b < dim; ++b) {
-      P[a][b] = mu * (F_q[a][b] - i.Finv[b][a]) +
-                lambda * (i.J - 1) * i.J * i.Finv[b][a];
-    }
-  }
-  */
   P = mu * (F_q - i.Finv) + lambda * (i.J - 1) * i.J * i.Finv;
 
   // -------- Active Component ---------------
@@ -214,7 +206,7 @@ void NeoHookeSolver::assemble_system() {
       const Tensor<2, dim, ADNumber> F =
           Physics::Elasticity::Kinematics::F(solution_gradient_loc[q]);
       //-------------Computing and caching--------------------------------------------
-      compute_and_cache(Finv, invert(F), intermediate);
+      compute_and_cache(Finv, invert(transpose(F), intermediate);
       compute_and_cache(J, determinant(F), intermediate);
       //--------------------------------------------------------------------------------
 

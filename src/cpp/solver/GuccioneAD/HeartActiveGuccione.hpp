@@ -106,11 +106,11 @@ protected:
   const double bs0s0 = 2;
   const double bs0n0 = 2;
   const double bn0n0 = 2;    
-  const double C = 2;
+  const double C = 2000;
   // Pressure for Neumann
-  ADNumber p_v = 15;
+  ADNumber p_v = 1500;
   // Active component
-  ADNumber T_a = 60;
+  ADNumber T_a = 6000;
   // Volumetric component
   ADNumber bulk = 400;
   //--------------------------

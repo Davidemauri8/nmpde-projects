@@ -122,10 +122,10 @@ namespace UtilsMesh {
 		return;
 	}
 
-	template <int D = 3>
+	template <int D = 3, typename Tria>
 	void visualize_grain_fibers(
 		std::function<void(const dealii::Point<3, double>&, std::vector<dealii::Tensor<1, 3>>&)> f,
-		const Triangulation<D>& triangulation,
+		const Tria& triangulation,
 		std::unique_ptr<FiniteElement<D>>& fe,
 		std::unique_ptr<Quadrature<D>>& quadrature,
 		const std::string save_into
@@ -186,9 +186,9 @@ namespace UtilsMesh {
 	}
 
 
-	template <int D = 3>
+	template <int D = 3, typename Tria>
 	void visualize_wall_depth(
-		const Triangulation<D>& triangulation,
+		const Tria& triangulation,
 		const std::string save_into
 	) {
 		using namespace dealii;
@@ -220,7 +220,23 @@ namespace UtilsMesh {
 			const double r_over_width = 
 				(r - MESH_ELLIPSOID_SMALL_RADIUS) / (MESH_ELLIPSOID_LARGE_RADIUS - MESH_ELLIPSOID_SMALL_RADIUS);
 
-			wall_depth[ci] = r_over_width;
+
+			double d = 29.1;
+			double z_cut = 11.9;
+			double xi_endo = 0.6;
+			double xi_epi = 1.02;
+
+			double r_plus = std::sqrt(x * x + y * y + (z - z_cut - d) * (z - z_cut - d));
+			double r_minus = std::sqrt(x * x + y * y + (z - z_cut + d) * (z - z_cut + d));
+
+			double cosh_xi = (r_plus + r_minus) / (2.0 * d);
+			double xi = std::acosh(cosh_xi);
+
+			double depth = (xi - xi_endo) / (xi_epi - xi_endo);
+			depth = (depth < 0) ? 0 : (depth > 1) ? 1 : depth;
+
+
+			wall_depth[ci] = depth;
 		}
 
 		data_out.add_data_vector(wall_depth, "wall_depth");

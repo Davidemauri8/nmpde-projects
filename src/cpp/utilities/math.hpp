@@ -62,7 +62,7 @@ Tensor<2, Dim>outer_product(const Tensor<1, Dim> v1, const Tensor<1, Dim> v2) {
     t[0][2] = t[2][0] = v1[0] * v2[2];
     t[1][1] = v1[1] * v2[1];
     t[1][2] = t[2][1] = v1[1] * v2[2];
-    t[2][2] = v1[2] * v1[2];
+    t[2][2] = v1[2] * v2[2];
     return t;
 }
 

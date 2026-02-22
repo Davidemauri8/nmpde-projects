@@ -89,10 +89,31 @@ public:
 		setup(const std::string& mesh);
 
 	void
-		solve(const std::string&);
+		solve(const std::string&, double tol = 1e-3);
 
 	void
 		output() const;
+
+	double compute_internal_volume( );
+
+	double compute_external_volume( );
+
+	double calculate_slice_rotation(double target_z, double tolerance);
+
+	double compute_unperturbed_volume();
+
+	void compute_height();
+	
+	void compute_radius();
+
+	void compute_strains(const std::string& save_path);
+
+	void step_pressure(unsigned int n_steps, double pressure = 0);
+
+	void step_active(unsigned int n_steps, double S_n = 0, double beta = 0);
+
+	void contraction();
+
 
 protected:
 
@@ -145,9 +166,7 @@ protected:
 			const Point<dim>& p, std::vector<Tensor<1, dim>>& basis, bool compute_n = false
 		);
 
-	double compute_internal_volume( );
 
-	double compute_external_volume( );
 
 	double
 		active_phi(const double i4);
@@ -160,7 +179,7 @@ protected:
 
 	double p_v;
 
-	const double alfa;
+	double alfa;
 
 	const double a;
 
@@ -178,9 +197,9 @@ protected:
 
 	const double bsf;
 
-	const double Sn;
+	double Sn;
 
-	const double beta; 
+	double beta; 
 
 	double bulk;
 	// Number of MPI processes.

@@ -32,7 +32,7 @@ BooleanDifference{ Volume{1}; Delete; }{ Volume{2}; Delete; }   // subtract the 
 Physical Surface("Robin") = {8};
 Physical Surface("Dirichlet") = {9};
 Physical Surface("Neumann") = {7};
-
+Physical Curve("Green", 5) = {12};
 
 Physical Volume("Heart") = {1}; 
 

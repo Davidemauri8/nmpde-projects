@@ -1,5 +1,7 @@
 #include <cmath>
 #include <deal.II/grid/grid_out.h>
+#include <deal.II/fe/mapping_q_eulerian.h>
+#include <deal.II/fe/mapping_q1_eulerian.h>
 
 #include <deal.II/lac/dynamic_sparsity_pattern.h>
 #include <deal.II/lac/precondition.h>
@@ -99,21 +101,6 @@ OrthotropicSolver::setup(
 
     {
 
-        // constraints.clear();
-        // DoFTools::make_hanging_node_constraints(dof_handler, constraints);
-        /*
-        FEValuesExtractors::Scalar z_axis(2);
-        ComponentMask z_axis_mask = fe->component_mask(z_axis);
-
-        VectorTools::interpolate_boundary_values(
-            dof_handler,
-            types::boundary_id(PDE_DIRICHLET),
-            Functions::ZeroFunction<dim>(dim),
-            constraints,
-            z_axis_mask);
-        */
-        // constraints.close();
-
         pde_out_c_par(pcout, "Initializing the sparsity pattern", GRN_COLOR);
 
         TrilinosWrappers::SparsityPattern sparsity(locally_owned_dofs,
@@ -156,19 +143,356 @@ OrthotropicSolver::setup(
 
     solution = 0.0;
 
+    /*
+    UtilsMesh::visualize_wall_depth<3>(mesh, "depthVisuals.vtu");
+    UtilsMesh::visualize_grain_fibers(
+        [this](const dealii::Point<3, double>& p, std::vector<dealii::Tensor<1, 3>>& b) {
+            orthothropic_base_at(p, b, true);
+        },
+        mesh, fe, quadrature, "fibersVisuals.vtu");
+        */
 }
 
 constexpr const auto dim = OrthotropicSolver::dim;
 
 void
-OrthotropicSolver::solve(const std::string& output_file_name) {
+OrthotropicSolver::step_pressure(unsigned int n_steps, double pressure_) {
+
+    if (pressure_)
+        p_v = pressure_;
+    // Remove any activbe contraction for the initial pressure step. 
+    double save_beta = 0, save_s_n = 0;
+    double final_pressure = p_v;
+
+    p_v = 0;
+    std::swap(beta, save_beta);
+    std::swap(Sn, save_s_n);
+
+    pde_out_c_par(pcout, "Stepping up the pressure: ", RED_COLOR);
+
+
+
+    ReductionControl solver_control(
+        key("Max iterations", 5000),
+        key("Tolerance", 1.0e-9)
+    );
+    // We use GMRES as the matrix is in general non symmetric. 
+    SolverGMRES<TrilinosWrappers::MPI::Vector> solver(solver_control);
+
+    constexpr const auto NEWTON_ITER = 10;
+
+    for (int step = 0; step < n_steps + 1; step++) {
+        // TODO: (just a little thing) add a break when a given threshold residual
+        // is achieved at each load_stepping step!
+        for (unsigned int newton_iter = 0; newton_iter < NEWTON_ITER; ++newton_iter) {
+
+            const double alpha_k = 0.45 + 0.20 * (newton_iter) / NEWTON_ITER;
+
+            pde_out_c_par(pcout, "Entering step number: " << newton_iter, YEL_COLOR);
+
+            this->build_system();
+
+            TrilinosWrappers::PreconditionAMG precondition_amg;
+            // precondition_amg.initialize(jacobian);
+
+            TrilinosWrappers::PreconditionILU::AdditionalData precondition_data;
+            precondition_data.ilu_fill = 2;           // Fill-in level (0=diagonal, 2=good)
+
+            TrilinosWrappers::PreconditionILU precondition_ilu;
+            precondition_ilu.initialize(jacobian, precondition_data);
+            try {
+                solver.solve(jacobian, step_owned, nr_rhs_f, precondition_ilu);
+            }
+            catch (const SolverControl::NoConvergence& e) {
+                pde_out_c_par(pcout, "FAILED to solve the GMRES iteration at step " << newton_iter, RED_COLOR);
+                break;
+            }
+            pde_out_c_par(pcout, "Complete after " << solver_control.last_step() << " GMRES iterations", RED_COLOR);
+            solution_owned.add(-alpha_k, step_owned);
+            constraints.distribute(solution_owned);
+
+            solution = solution_owned;
+
+            for (int NR = 0; NR < 0; ++NR) {
+                this->build_system(false);
+                solver.solve(jacobian, step_owned, nr_rhs_f, precondition_amg);
+                solution_owned.add(-alpha_k / 3, step_owned);
+                constraints.distribute(solution_owned);
+                solution = solution_owned;
+            }
+
+        }
+        // Incomplete placeholder for pressure load stepping: 
+        // just sub with max_press - init_press / It_amt
+        if (step < n_steps)
+            p_v += final_pressure / n_steps;
+    }
+
+    pde_out_c_par(pcout, "Completed the newton iteration at pressure " << p_v << ", saving the result", GRN_COLOR);
+    {
+        DataOut<dim> data_out;
+
+        data_out.add_data_vector(dof_handler, solution, "solution");
+
+        std::vector<unsigned int> partition_int(mesh.n_active_cells());
+        GridTools::get_subdomain_association(mesh, partition_int);
+        const Vector<double> partitioning(partition_int.begin(), partition_int.end());
+        data_out.add_data_vector(partitioning, "partitioning");
+
+        data_out.build_patches();
+
+        data_out.write_vtu_with_pvtu_record("./",
+            "PressureStep.vtk", 0,
+            MPI_COMM_WORLD);
+
+        pde_out_c_par(pcout, "Result saved into file PressureStep.vtk", GRN_COLOR);
+    }
+
+    // Restore the active formulation. 
+    std::swap(beta, save_beta);
+    std::swap(Sn, save_s_n);
+}
+
+void
+OrthotropicSolver::step_active(unsigned int n_steps, double S_n_, double beta_) {
+
+    if (S_n_)
+        Sn = S_n_;
+    if (beta_)
+        beta = beta_;
+    double final_Sn = Sn, final_beta = beta;
+
+    Sn = beta = 0.0;
+    pde_out_c_par(pcout, "Stepping up the active components: ", RED_COLOR);
+    ReductionControl solver_control(
+        key("Max iterations", 5000),
+        key("Tolerance", 1.0e-9)
+    );
+    // We use GMRES as the matrix is in general non symmetric. 
+    SolverGMRES<TrilinosWrappers::MPI::Vector> solver(solver_control);
+
+    constexpr const auto NEWTON_ITER = 10;
+
+    for (int step = 0; step < n_steps; step++) {
+        // TODO: (just a little thing) add a break when a given threshold residual
+        // is achieved at each load_stepping step!
+        for (unsigned int newton_iter = 0; newton_iter < NEWTON_ITER; ++newton_iter) {
+
+            const double alpha_k = 0.35 + 0.20 * (newton_iter) / NEWTON_ITER;
+
+            pde_out_c_par(pcout, "Entering step number: " << newton_iter, YEL_COLOR);
+
+            this->build_system();
+
+
+
+            TrilinosWrappers::PreconditionILU::AdditionalData precondition_data;
+            precondition_data.ilu_fill = 2;           // Fill-in level (0=diagonal, 2=good)
+
+            TrilinosWrappers::PreconditionILU precondition_ilu;
+            precondition_ilu.initialize(jacobian, precondition_data);
+            try {
+                solver.solve(jacobian, step_owned, nr_rhs_f, precondition_ilu);
+            }
+            catch (const SolverControl::NoConvergence& e) {
+                pde_out_c_par(pcout, "FAILED to solve the GMRES iteration at step " << newton_iter, RED_COLOR);
+                break;
+            }
+
+            solution_owned.add(-alpha_k, step_owned);
+            constraints.distribute(solution_owned);
+
+            solution = solution_owned;
+
+            for (int NR = 0; NR < 0; ++NR) {
+                this->build_system(false);
+                solver.solve(jacobian, step_owned, nr_rhs_f, precondition_ilu);
+                solution_owned.add(-alpha_k / 3, step_owned);
+                constraints.distribute(solution_owned);
+                solution = solution_owned;
+            }
+
+        }
+        // Incomplete placeholder for pressure load stepping: 
+        // just sub with max_press - init_press / It_amt
+        Sn += final_Sn / n_steps;
+        beta += final_beta / n_steps;
+    }
+
+    pde_out_c_par(pcout, "Completed the newton iteration, saving the result", GRN_COLOR);
+    {
+        DataOut<dim> data_out;
+
+        data_out.add_data_vector(dof_handler, solution, "solution");
+
+        std::vector<unsigned int> partition_int(mesh.n_active_cells());
+        GridTools::get_subdomain_association(mesh, partition_int);
+        const Vector<double> partitioning(partition_int.begin(), partition_int.end());
+        data_out.add_data_vector(partitioning, "partitioning");
+
+        data_out.build_patches();
+
+        data_out.write_vtu_with_pvtu_record("./",
+            "ActiveStep.vtk", 0,
+            MPI_COMM_WORLD);
+
+        pde_out_c_par(pcout, "Result saved into file ActiveStep.vtk", GRN_COLOR);
+    }
+
+}
+
+
+
+void 
+OrthotropicSolver::contraction() {
+
+    constexpr const auto tol = 100;
+    constexpr const auto delta_t = 0.05;
+
+    constexpr const auto final_time = 1.0;
+    constexpr const auto t0 = 0.3;
+    const auto Sn_save = Sn;
+
+    double t = 0.0;
+
+    const auto Sn_func = [Sn_save, t0, final_time](double t) {
+        return Sn_save * std::sin(M_PI * (t - t0) / (final_time - t0)) * std::sin(M_PI * (t - t0) / (final_time - t0));
+        };
+
+    // Assume the ventricle is initially filled. 
+    Sn = 0.0;
+
+    solve("time_-1" + std::to_string(t));
+    const auto V_ed = compute_external_volume();
+    double pressure = p_v;
+
+    std::ofstream outfile;
+
+    if (mpi_rank == 0) {
+        outfile.open("output.txt", std::ios::app);  // append mode
+        if (!outfile.is_open()) {
+            std::cerr << "Error opening file!" << std::endl;
+        }
+    }
+
+    t = t0;
+    while (t < final_time) {
+
+        if (p_v < 2.1) {
+
+            Sn = Sn_func(t);
+            solve("time_" + std::to_string(t), 1e-1);
+
+            pde_out_c_par(pcout, "ACTIVE COMPONENT " << Sn << ", " << beta, BLU_COLOR);
+
+            auto vol = compute_external_volume();
+            pde_out_c_par(pcout, "AT TIME " << t << " PRESSURE " << pressure << " VOLUME" << vol, BLU_COLOR);
+
+            while (std::abs(vol - V_ed) > tol) {
+                const auto C_km1 = vol / pressure;
+
+                pde_out_c_par(pcout, "VOLUME DIFFERENCE " << (vol - V_ed), RED_COLOR);
+
+                pressure = pressure - (vol - V_ed) / C_km1;
+                pde_out_c_par(pcout, "NEW PRESSURE " << (pressure), RED_COLOR);
+
+                p_v = pressure;
+                solve("time_" + std::to_string(t), 1e-1);
+
+                vol = compute_external_volume();
+            }
+            if (mpi_rank == 0) {
+                outfile << vol << " " << p_v << " " << t << std::endl;
+                outfile.flush();  // Force write to disk
+            }
+        }
+        else {
+            // Ejection of the ventricle. 
+            constexpr const auto Cwk = 0.00165; // mL / kPa
+            constexpr const auto Rwk = 80   ; // ms / mL
+            // Pressure in kPa. 
+            // compute_external_volume() gives volume in millimiter cubed. 
+            // 1000 mm = 1 mL
+            Sn = Sn_func(t);
+            solve("time_" + std::to_string(t));
+
+            // Before time loop: keep track of previous state
+            double P_old = p_v;
+            double V_old = compute_external_volume(); // mm^3
+            // Inside ejection branch, for each time t:
+            
+            double P = P_old;
+
+            const double dt = delta_t;   // seconds
+            const double dt_ms = dt * 1000.0;
+
+            const double V_old_ml = V_old / 1000.0;
+
+            for (unsigned int it = 0; it < 20; ++it)
+            {
+                // --- evaluate F(P) ---
+
+                p_v = P;
+                solve("time_" + std::to_string(t), 1e-4);
+                pde_out_c_par(pcout, "WindKESSEL ON" << p_v, BLU_COLOR);
+
+                const double V_now = compute_external_volume();
+                const double V_now_ml = V_now / 1000.0;
+
+                const double F =
+                    Cwk * (P - P_old)
+                    + (dt_ms / Rwk) * P
+                    + (V_now_ml - V_old_ml);
+
+                if (std::abs(F) < 1e-6)
+                    break;
+
+                // --- numerical derivative ---
+
+                const double eps = 1e-3;
+
+                p_v = P + eps;
+                solve("time_" + std::to_string(t), 1e-4);
+
+                const double V_eps = compute_external_volume() / 1000.0;
+
+                const double F_eps =
+                    Cwk * (P + eps - P_old)
+                    + (dt_ms / Rwk) * (P + eps)
+                    + (V_eps - V_old_ml);
+
+                const double dF = (F_eps - F) / eps;
+
+                // Newton update
+                P -= F / dF;
+            }
+
+            // After convergence, accept P, update state
+            p_v = P;
+            V_old = compute_external_volume();
+            P_old = P;
+            pde_out_c_par(pcout, "PRESSURE AND VOLUME: " << p_v << ", " << V_old, BLU_COLOR);
+
+            // Logging
+            if (mpi_rank == 0) {
+                outfile << V_old << " " << p_v << " " << t << std::endl;
+                outfile.flush();
+            }
+        }
+        t += delta_t;
+    }
+
+}
+
+void
+OrthotropicSolver::solve(const std::string& output_file_name, double tol ) {
 
     const unsigned int dofs_per_cell = fe->dofs_per_cell;
 
     pde_out_c_par(pcout, "Solving the non linear mechanics: ", RED_COLOR);
     pde_out_c_par(pcout, "DOFS per Cell " << dofs_per_cell, RED_COLOR);
 
-#define MAX_ITER_AMT 25
+    constexpr const auto MAX_ITER_AMT = 70;
     //     solution = 0.0;
 
     ReductionControl solver_control(
@@ -178,112 +502,76 @@ OrthotropicSolver::solve(const std::string& output_file_name) {
     // We use GMRES as the matrix is in general non symmetric. 
     SolverGMRES<TrilinosWrappers::MPI::Vector> solver(solver_control);
 
-    for (int LOAD_STEPPING = 0; LOAD_STEPPING < 7; LOAD_STEPPING++) {
         // TODO: (just a little thing) add a break when a given threshold residual
         // is achieved at each load_stepping step!
-        for (unsigned int newton_iter = 0; newton_iter < MAX_ITER_AMT; ++newton_iter) {
+    double res = 1.0;
+    unsigned int newton_iter = 0;
+    while (res > tol && newton_iter < MAX_ITER_AMT) {
+        //for (unsigned int newton_iter = 0; newton_iter < MAX_ITER_AMT; ++newton_iter) {
 
-            const double alpha_k = 0.15 + 0.20 * (newton_iter) / MAX_ITER_AMT;
+        const double alpha_k = 0.15 + 0.20 * (newton_iter) / MAX_ITER_AMT;
 
-            pde_out_c_par(pcout, "Entering step number: " << newton_iter, YEL_COLOR);
-            pde_out_c_par(pcout, "Assembling the linear system", RED_COLOR);
+        // pde_out_c_par(pcout, "Assembling the linear system", RED_COLOR);
 
-            this->build_system();
+        this->build_system();
 
-            pde_out_c_par(pcout, "Solving the linear system:", RED_COLOR);
-            pde_out_c_par(pcout, "L2 Norm of residual: " << nr_rhs_f.l2_norm(), RED_COLOR);
-            pde_out_c_par(pcout, "L2 Norm of Jacobian: " << jacobian.l1_norm(), RED_COLOR);
+        // pde_out_c_par(pcout, "Solving the linear system:", RED_COLOR);
+        res = nr_rhs_f.l2_norm();
+        pde_out_c_par(pcout, newton_iter << ") L2 Norm of residual: " << res, RED_COLOR);
+        // pde_out_c_par(pcout, "L2 Norm of Jacobian: " << jacobian.l1_norm(), RED_COLOR);
 
-            /*  ---- Notice ----
-            * When using a non object oriented constraint (e.g. not just the z component,
-            * uncomment this section of the code */
-            /* MatrixTools::apply_boundary_values(
-                boundary_values, jacobian, step, nr_rhs_f, false
-            ); */
+        /*  ---- Notice ----
+        * When using a non object oriented constraint (e.g. not just the z component,
+        * uncomment this section of the code */
+        /* MatrixTools::apply_boundary_values(
+            boundary_values, jacobian, step, nr_rhs_f, false
+        ); */
 
-            TrilinosWrappers::PreconditionAMG precondition_amg;
-            precondition_amg.initialize(jacobian);
+        TrilinosWrappers::PreconditionAMG precondition_amg;
+        precondition_amg.initialize(jacobian);
 
 
-            try {
-                solver.solve(jacobian, step_owned, nr_rhs_f, precondition_amg);
-            }
-            catch (const SolverControl::NoConvergence& e) {
-                pde_out_c_par(pcout, "FAILED to solve the GMRES iteration at step " << newton_iter, RED_COLOR);
-                // pde_out_c("Quitting the iteration (the partial results will be written). "
-                //    << newton_iter, RED_COLOR);
-                pde_out_c_par(pcout, "Originally: " << e.what(), RED_COLOR);
-                break;
-            }
-            pde_out_c_par(pcout, "Complete after " << solver_control.last_step() << " GMRES iterations", RED_COLOR);
-            pde_out_c_par(pcout, "L2 Norm of the step: " << step_owned.l2_norm(), RED_COLOR);
-
-            solution_owned.add(-alpha_k, step_owned);
-            // A note: in dealii programs the constraint is distributed to the 
-            // entire solution, while in 
-            // https://dealii.org/current/doxygen/deal.II/step_32.html 
-            // only to the local contribution. We choose the latter approach
-            // constraints.distribute(solution);
-            constraints.distribute(solution_owned);
-
-            solution = solution_owned;
-            // "false" newton iteration keeping the jacobian fixed, has trivial 
-            // computational cost and aids convergence
-            for (int NR = 0; NR < 4; ++NR) {
-                this->build_system(false);
-                solver.solve(jacobian, step_owned, nr_rhs_f, precondition_amg);
-                solution_owned.add(-alpha_k/3, step_owned);
-                constraints.distribute(solution_owned);
-                solution = solution_owned;
-                pde_out_c_par(pcout, "New iteration residual: " << nr_rhs_f.l2_norm() , RED_COLOR);
-            }
-
-            /*
-            *  This was a previous implementation of line search for the single threaded
-            * implementation of deal-ii.
-            * TODO: adapt this to MPI using distributed vectors and the line search utils
-            * from dealii.
-            * 
-            constexpr const double factor = 2;
-            while (nr_rhs_f.l2_norm() > cur_norm && lambda > (1 / 128.0)) {
-                pde_out_c("Current res " << nr_rhs_f.l2_norm() << " previous " << cur_norm, BLU_COLOR);
-                solution = line_search_temp;
-                lambda /= factor;
-                solution.add(-lambda, step);
-                this->build_system(false);
-                pde_out_c("Value of " << lambda * 1.5 << " failed for lambda, attempting " << lambda, RED_COLOR);
-            } 
-            if (cur_norm < nr_rhs_f.l2_norm()) {
-                solution = line_search_temp;
-                this->build_system(false);
-                // The update has failed, switch to a gradient descent iteration on the
-                // sum of squared of the residual.
-                jacobian.Tvmult(step, nr_rhs_f);
-                lambda = 0.1;
-                solution.add(-lambda, step);
-
-                this->build_system(false);
-                constexpr const double factor = 2;
-                while (nr_rhs_f.l2_norm() > cur_norm && lambda > (1 / 256.0)) {
-                    pde_out_c("Steepest current res " << nr_rhs_f.l2_norm() << " previous " << cur_norm, BLU_COLOR);
-                    solution = line_search_temp;
-                    lambda /= factor;
-                    solution.add(-lambda, step);
-                    this->build_system(false);
-                    pde_out_c("Steepest value of " << lambda * 1.5 << " failed for lambda, attempting " << lambda, RED_COLOR);
-                }
-            }*/
-
-            // At each step, ensure the solution has the right constraints. Use the
-            // object oriented version to just limit the z component of the displacement
-            // constraints.distribute(solution);
-
+        try {
+            solver.solve(jacobian, step_owned, nr_rhs_f, precondition_amg);
         }
-        // Incomplete placeholder for pressure load stepping: 
-        // just sub with max_press - init_press / It_amt
-        p_v += 0.10;
-        pde_out_c_par(pcout, "Repeating the stepping iteration.", RED_COLOR);
+        catch (const SolverControl::NoConvergence& e) {
+            pde_out_c_par(pcout, "FAILED to solve the GMRES iteration at step " << newton_iter, RED_COLOR);
+            // pde_out_c("Quitting the iteration (the partial results will be written). "
+            //    << newton_iter, RED_COLOR);
+            pde_out_c_par(pcout, "Originally: " << e.what(), RED_COLOR);
+            break;
+        }
+        // pde_out_c_par(pcout, "Complete after " << solver_control.last_step() << " GMRES iterations", RED_COLOR);
+        // pde_out_c_par(pcout, "L2 Norm of the step: " << step_owned.l2_norm(), RED_COLOR);
+
+        solution_owned.add(-alpha_k, step_owned);
+        // A note: in dealii programs the constraint is distributed to the 
+        // entire solution, while in 
+        // https://dealii.org/current/doxygen/deal.II/step_32.html 
+        // only to the local contribution. We choose the latter approach
+        // constraints.distribute(solution);
+        constraints.distribute(solution_owned);
+
+        solution = solution_owned;
+        // "false" newton iteration keeping the jacobian fixed, has trivial 
+        // computational cost and aids convergence
+        // pde_out_c_par(pcout, "Beginning Quasi Newton rounds...", RED_COLOR);
+        for (int NR = 0; NR < 0; ++NR) {
+            this->build_system(false);
+            solver.solve(jacobian, step_owned, nr_rhs_f, precondition_amg);
+            solution_owned.add(-alpha_k/3, step_owned);
+            constraints.distribute(solution_owned);
+            solution = solution_owned;
+        }
+        // At each step, ensure the solution has the right constraints. Use the
+        // object oriented version to just limit the z component of the displacement
+        // constraints.distribute(solution);
+
     }
+    // Incomplete placeholder for pressure load stepping: 
+    // just sub with max_press - init_press / It_amt
+    // p_v += 0.17;
+    
 
     pde_out_c_par(pcout, "Completed the newton iteration, saving the result", GRN_COLOR);
     DataOut<dim> data_out;
@@ -310,14 +598,14 @@ OrthotropicSolver::solve(const std::string& output_file_name) {
 
 double
 OrthotropicSolver::active_phi(const double i4) {
-    return Sn * (1 + beta * (std::sqrt(i4) - 1.0)) / (i4 * std::sqrt(i4));
+    return Sn * (1 + beta * (std::sqrt(i4) - 1.0)) / (i4);
 }
 
 double
 OrthotropicSolver::active_phi_prime(const double i4) {
-    const auto i452 = std::pow(i4, 5.0 / 2);
-    return (-3 / 2.0) * Sn * (1 + beta * (std::sqrt(i4) - 1)) / (i452)+
-        Sn * beta / (2 * i4*i4);
+    return (Sn / (i4)) * ((-(1 + beta * (sqrt(i4)-1.0)) / i4) + b/(2*sqrt(i4)));
+    // return (-3 / 2.0) * Sn * (1 + beta * (std::sqrt(i4) - 1)) / (i452)+
+    //     Sn * beta / (2 * i4*i4);
 }
 
 
@@ -378,9 +666,10 @@ void OrthotropicSolver::compute_deP_deF_at_q(
             r += asf* fs0_plus_sf0 * 2 * f_mix[i][j] * D.exp_bi8sf_sq * (1 + 2 * bsf * D.i8sf * D.i8sf);
             r += asf * D.i8sf * D.exp_bi8sf_sq * f * mixed;
 
-            // Active term
-            r += active_phi_prime(D.i4f) * Ff0f0t[i][j] * Ff0f0t + active_phi(D.i4f) * f * D.f0f0t;
-
+            if (D.i4f > 1) {
+                // Active term
+                r += active_phi_prime(D.i4f) * Ff0f0t[i][j] * Ff0f0t + active_phi(D.i4f) * f * D.f0f0t;
+            }
             for (int l = 0; l < 3; ++l)
                 for (int k = 0; k < 3; ++k)
                     deP_deF_at_q[l*3+k][i][j] = r[l][k];
@@ -414,6 +703,127 @@ void OrthotropicSolver::compute_P_at_q(
     // P_at_q += b * i.J * i.Fmt;
     P_at_q += Ff0f0t * active_phi(i.i4f);
 
+}
+
+void OrthotropicSolver::compute_radius()
+{
+    solution.update_ghost_values();
+
+    MappingQEulerian<dim, TrilinosWrappers::MPI::Vector> mapping(
+        fe->degree,
+        dof_handler,
+        solution);
+
+    FEFaceValues<dim> fe_face(
+        mapping,
+        *fe,
+        *surf_quadrature,
+        update_quadrature_points);
+
+    double local_r_epi = 0.0;
+    double local_r_endo = 1e5;
+
+    for (const auto& cell : dof_handler.active_cell_iterators())
+    {
+        if (!cell->is_locally_owned())
+            continue;
+
+        for (unsigned int f = 0; f < GeometryInfo<dim>::faces_per_cell; ++f)
+        {
+            if (!cell->face(f)->at_boundary())
+                continue;
+
+            const auto bid = cell->face(f)->boundary_id();
+
+            if (!is_dirichlet(bid))
+                continue;
+
+            fe_face.reinit(cell, f);
+
+            for (unsigned int q = 0; q < fe_face.n_quadrature_points; ++q)
+            {
+                const Point<dim>& x = fe_face.quadrature_point(q);
+
+                const double r = std::sqrt(x[0] * x[0] + x[1] * x[1]);
+                pcout << "RAD: " << r << " x " << x[0] << " y " << x[1] << " z " << x[2] << std::endl;
+                local_r_endo = std::min(local_r_endo, r);
+                local_r_epi = std::max(local_r_epi, r);
+
+            }
+        }
+    }
+
+    pde_out_c_par(pcout,
+        "Local Epi diameter = " << local_r_epi <<
+        "  Endo diameter = " << local_r_endo,
+        YEL_COLOR);
+
+
+    const double r_endo = Utilities::MPI::min(local_r_endo, MPI_COMM_WORLD);
+    const double r_epi = Utilities::MPI::max(local_r_epi, MPI_COMM_WORLD);
+
+    double D_epi = 2.0 * r_epi;
+    double D_endo = 2.0 * r_endo;
+
+    pde_out_c_par(pcout,
+        "Epi diameter = " << D_epi <<
+        "  Endo diameter = " << D_endo,
+        YEL_COLOR);
+
+    pde_out_c_par(pcout,
+        "Wall thickness = " << D_epi-D_endo,
+        YEL_COLOR);
+}
+
+
+void OrthotropicSolver::compute_height()
+{
+    solution.update_ghost_values();
+
+    MappingQEulerian<dim, TrilinosWrappers::MPI::Vector> mapping(
+        fe->degree,
+        dof_handler,
+        solution);
+
+    FEFaceValues<dim> fe_face(
+        mapping,
+        *fe,
+        *surf_quadrature,
+        update_quadrature_points);
+
+    double local_zmax = -1e30;
+
+    for (const auto& cell : dof_handler.active_cell_iterators())
+    {
+        if (!cell->is_locally_owned())
+            continue;
+
+        for (unsigned int f = 0; f < GeometryInfo<dim>::faces_per_cell; ++f)
+        {
+            if (!cell->face(f)->at_boundary())
+                continue;
+
+            const auto bid = cell->face(f)->boundary_id();
+
+            if (!is_robin(bid))
+                continue;
+
+            fe_face.reinit(cell, f);
+
+            for (unsigned int q = 0; q < fe_face.n_quadrature_points; ++q)
+            {
+                const Point<dim>& x = fe_face.quadrature_point(q);
+
+                local_zmax = std::max(local_zmax, x[2]);
+            }
+        }
+    }
+    const double zmax = Utilities::MPI::max(local_zmax, MPI_COMM_WORLD);
+
+    double height = zmax;
+
+    pde_out_c_par(pcout, "Computed the height to be: " << height,
+        YEL_COLOR);
 }
 
 void
@@ -582,7 +992,6 @@ OrthotropicSolver::build_system(bool build_jacobian) {
 
                 if (is_robin(id)) {
                     
-                    val_u_q_surf.clear();
                     fe_face_values[displacement].get_function_values(
                         solution,     // The global solution vector
                         val_u_q_surf      // Output: The calculated function at all q-points
@@ -602,7 +1011,7 @@ OrthotropicSolver::build_system(bool build_jacobian) {
 
                             // Rhs contribution
 
-                            double up = alfa * scalar_product(
+                            double up = +alfa * scalar_product(
                                 phi_i, val_u_q_surf[q]
                             ) * fe_face_values.JxW(q);
                             cell_nr_rhs(i) += up;
@@ -698,17 +1107,272 @@ OrthotropicSolver::build_system(bool build_jacobian) {
 
 }
 
+// Just use volume integration
 double OrthotropicSolver::compute_internal_volume() {
-    // Just use volume integration
-    return 0.0;
+
+    pde_out_c_par(pcout, "Computing the internal volume...", YEL_COLOR);
+    // Number of quadrature points for each element.
+    const unsigned int n_q = quadrature->size();
+
+
+    TrilinosWrappers::MPI::Vector ghosted_solution;
+    const IndexSet& locally_owned_dofs = dof_handler.locally_owned_dofs();
+    const IndexSet& locally_relevant_dofs =
+        DoFTools::extract_locally_relevant_dofs(dof_handler);
+
+    ghosted_solution.reinit(locally_owned_dofs, locally_relevant_dofs, MPI_COMM_WORLD);
+
+    ghosted_solution = solution;
+    ghosted_solution.update_ghost_values();
+
+    MappingQEulerian<dim, TrilinosWrappers::MPI::Vector> mapping(
+        fe->degree,
+        dof_handler,
+        ghosted_solution);
+
+    FEValues<dim> fe_values(mapping, *fe, *quadrature,
+        update_values | update_quadrature_points | update_JxW_values);
+
+    double local_volume_acc = 0;
+
+    for (const auto& cell : dof_handler.active_cell_iterators())
+    {
+        if (!cell->is_locally_owned())
+            continue;
+        // Print a progress bar every 1% of the dofs handleld
+        // prog_bar_c(prog_i, n, RED_COLOR); ++prog_i;
+
+        // Note: avoid evaluating the surface values here as most tetrahedrons
+        // are not part of the surface, evaluate only inside the ifs.
+        fe_values.reinit(cell);
+
+        for (unsigned int q = 0; q < n_q; ++q)
+        {            
+            local_volume_acc += fe_values.JxW(q);
+        }
+    }
+
+    // MPI sum over all processors
+    const double global_volume =
+        Utilities::MPI::sum(local_volume_acc,
+            MPI_COMM_WORLD);
+
+    pde_out_c_par(pcout, "Computed the internal volume to be: " << global_volume, YEL_COLOR);
+
+    return global_volume;
 }
 
 double OrthotropicSolver::compute_external_volume() {
-    // TODO: To be done when simulating the pressure cycle, use divergence theorem
-    // on the endocardium
-    return 0.0;
+
+    pde_out_c_par(pcout, "Computing the external volume...", YEL_COLOR);
+    double local_volume = 0;
+    FEFaceValues<dim> fe_face_values(*fe, *surf_quadrature,
+        update_values | update_gradients | update_normal_vectors | update_quadrature_points | update_JxW_values);
+
+
+    std::vector<Tensor<1, dim>> u_values(surf_quadrature->size());
+    std::vector<Tensor<2, dim>> grad_u(surf_quadrature->size());
+
+    for (const auto& cell : dof_handler.active_cell_iterators()) {
+        if (!cell->is_locally_owned())
+            continue;
+
+        for (unsigned int f = 0; f < cell->n_faces(); ++f) {
+            if (cell->face(f)->at_boundary() && is_neumann(cell->face(f)->boundary_id())) {
+                fe_face_values.reinit(cell, f);
+
+                fe_face_values[FEValuesExtractors::Vector(0)].get_function_values(solution, u_values);
+                fe_face_values[FEValuesExtractors::Vector(0)].get_function_gradients(solution, grad_u);
+
+                for (unsigned int q = 0; q < surf_quadrature->size(); ++q) {
+                    const Point<dim> X = fe_face_values.quadrature_point(q);
+                    const Tensor<1, dim> x_current = X + u_values[q];
+
+                    Tensor<2, dim> F = Physics::Elasticity::StandardTensors<dim>::I + grad_u[q];
+                    const double   J = determinant(F);
+                    Tensor<2, dim> F_inv_T = transpose(invert(F));
+
+                    const Tensor<1, dim> N = fe_face_values.normal_vector(q);
+                    // Deformed area vector via Nanson: n da = J F^{-T} N dA
+                    const Tensor<1, dim> n_da = J * F_inv_T * N;
+
+                    // We need the "current" normal n_cur * da_cur. BEFORE
+                    // WE WERE USING THE UNDEFORMED NORMAL...
+                    // Using Nanson's formula: n da = J * F^-T * N * dA
+                    local_volume += (x_current / 3.0 * -n_da) * fe_face_values.JxW(q);
+                }
+            }
+        }
+
+    }
+
+    // MPI sum over all processors
+    const double global_volume =
+        Utilities::MPI::sum(local_volume,
+            MPI_COMM_WORLD);
+
+    pde_out_c_par(pcout, "Computed the external volume to be: " << global_volume, YEL_COLOR);
+    return global_volume;
+
 }
 
+void OrthotropicSolver::compute_strains(const std::string& save_path) {
+    
+    const FEValuesExtractors::Vector displacement(0);
+    
+    FEValues<dim> fe_values(*fe, *quadrature,
+        update_gradients | update_quadrature_points | update_JxW_values);
+
+    const unsigned int n_q = quadrature->size();
+    std::vector<Tensor<2, dim>> grad_u(n_q);
+
+    // Storage for projected strains — one value per cell (averaged over quadrature points)
+    // You can also store per-quadrature-point if you prefer
+    Vector<double> E_cc_vec(mesh.n_active_cells());
+    Vector<double> E_ll_vec(mesh.n_active_cells());
+    Vector<double> E_rr_vec(mesh.n_active_cells());
+    Vector<double> E_cl_vec(mesh.n_active_cells());
+    Vector<double> E_cr_vec(mesh.n_active_cells());
+    Vector<double> E_lr_vec(mesh.n_active_cells());
+
+    for (const auto& cell : dof_handler.active_cell_iterators()) {
+
+        if (!cell->is_locally_owned()) continue;
+
+        fe_values.reinit(cell);
+        fe_values[displacement].get_function_gradients(solution, grad_u);
+
+        double Ecc = 0.0, Ell = 0.0, Err = 0.0;
+        double Ecl = 0.0, Ecr = 0.0, Elr = 0.0;
+        double total_weight = 0;
+
+        for (unsigned int q = 0; q < n_q; ++q) {
+            const Point<dim> X = fe_values.quadrature_point(q);
+            const double w = fe_values.JxW(q);
+
+            // Deformation gradient and right Cauchy-Green tensor
+            Tensor<2, dim> F = Physics::Elasticity::StandardTensors<dim>::I + grad_u[q];
+            Tensor<2, dim> C = transpose(F) * F;
+            Tensor<2, dim> E = 0.5 * (C - Physics::Elasticity::StandardTensors<dim>::I);
+
+            // Build cardiac coordinate system at this point
+            // Circumferential: tangent to ellipsoid in XY plane, counterclockwise
+            // Longitudinal: pointing from apex to base (z direction)  
+            // Radial: pointing outward from the long axis
+            Tensor<1, dim> e_r, e_c, e_l;
+
+            const double x = X[0], y = X[1], z = X[2];
+
+            const double csquared = MESH_ELLIPSOID_Z_DEFORMATION * MESH_ELLIPSOID_Z_DEFORMATION;
+            const double cfourthp = csquared * csquared;
+
+            const double r = std::sqrt(x * x + y * y + z * z / cfourthp);
+            const double rr = std::sqrt(x * x + y * y);
+            // Let s be the radial vector aligned with the collagen sheet. 
+            e_r[0] = x / r; e_r[1] = y / r; e_r[2] = (z / csquared) / r;
+            e_c[0] = -y / rr; e_c[1] = x / rr; e_c[2] = 0;
+            e_l = cross_product_3d(e_c, e_r);
+
+            // Project E onto cardiac coordinate system
+            // E_ij = e_i · E · e_j
+            Ecc += (e_c * (E * e_c)) * w;
+            Ell += (e_l * (E * e_l)) * w;
+            Err += (e_r * (E * e_r)) * w;
+            Ecl += (e_c * (E * e_l)) * w;
+            Ecr += (e_c * (E * e_r)) * w;
+            Elr += (e_l * (E * e_r)) * w;
+
+            total_weight += w;
+        }
+
+        // Volume-average over the cell
+        const unsigned int idx = cell->active_cell_index();
+
+        E_cc_vec[idx] = Ecc / total_weight;
+        E_ll_vec[idx] = Ell / total_weight;
+        E_rr_vec[idx] = Err / total_weight;
+        E_cl_vec[idx] = Ecl / total_weight;
+        E_cr_vec[idx] = Ecr / total_weight;
+        E_lr_vec[idx] = Elr / total_weight;
+    }
+
+    // Add to DataOut for visualization
+    DataOut<dim> data_out;
+    data_out.add_data_vector(dof_handler, solution, "solution");
+    data_out.add_data_vector(E_cc_vec, "E_cc");
+    data_out.add_data_vector(E_ll_vec, "E_ll");
+    data_out.add_data_vector(E_rr_vec, "E_rr");
+    data_out.add_data_vector(E_cl_vec, "E_cl");
+    data_out.add_data_vector(E_cr_vec, "E_cr");
+    data_out.add_data_vector(E_lr_vec, "E_lr");
+    data_out.build_patches();
+    // write as usual...
+
+    data_out.write_vtu_with_pvtu_record("./",
+        std::to_string(alfa) + "_" + save_path, 0,
+        MPI_COMM_WORLD);
+
+    pde_out_c_par(pcout, "Result of strain computation saved into file " << save_path, GRN_COLOR);
+
+}
+
+// Pseudocode for calculating rotation at a specific Z-coordinate
+double 
+OrthotropicSolver::calculate_slice_rotation(double target_z, double tolerance) {
+
+    double total_phi = 0;
+    unsigned int count = 0;
+
+    FEValues<dim> fe_values(*fe, *quadrature,
+        update_values | update_normal_vectors | update_quadrature_points | update_JxW_values);
+    std::vector<Tensor<1, dim>> u_values(quadrature->size());
+
+    for (const auto& cell : dof_handler.active_cell_iterators()) {
+        if (!cell->is_locally_owned()) 
+            continue;
+
+        fe_values.reinit(cell);
+
+        // Get displacement values to find current position x = X + u
+        fe_values[FEValuesExtractors::Vector(0)].get_function_values(solution, u_values);
+
+        if (std::abs(cell->center()[2] - target_z) > tolerance)
+            continue;
+
+        for (unsigned int q = 0; q < surf_quadrature->size(); ++q) {
+
+            const Point<dim> X = fe_values.quadrature_point(q);
+            const Tensor<1, dim> x_current = X + u_values[q];
+
+            // Reference and deformed angles in the XY plane
+            double theta_ref = std::atan2(X[1], X[0]);
+            double theta_def = std::atan2(x_current[1], x_current[0]);
+
+            double d_phi = theta_def - theta_ref;
+
+            // Handle atan2 wrapping (-pi to pi)
+            if (d_phi > M_PI) d_phi -= 2 * M_PI;
+            if (d_phi < -M_PI) d_phi += 2 * M_PI;
+
+            total_phi += d_phi;
+            count++;
+           
+        }
+    }
+    // Synchronize across MPI processors
+    const double global_angle = Utilities::MPI::sum(total_phi, MPI_COMM_WORLD) /
+        Utilities::MPI::sum(count, MPI_COMM_WORLD);
+    pde_out_c_par(pcout, "(z=" << target_z << ")Computed the twist to be: " << global_angle << "(" << 180*(global_angle/M_PI) << "deg)", YEL_COLOR);
+
+    return global_angle;
+}
+
+double
+OrthotropicSolver::compute_unperturbed_volume() {
+    const double volume = GridTools::volume(mesh);
+    pde_out_c_par(pcout, "Computed the resting volume to be:" << volume, YEL_COLOR);
+    return volume;
+}
 
 void
 OrthotropicSolver::compute_basis_at_quadrature(
@@ -720,6 +1384,28 @@ OrthotropicSolver::compute_basis_at_quadrature(
     for (unsigned int i = 0; i < p.size(); ++i)
         orthothropic_base_at(p[i], orth_sys[i], compute_n);
     return;
+}
+
+double compute_point_depth(const dealii::Point<dim>& p) {
+
+    const double x = p[0], y = p[1], z = p[2];
+
+    double d = 29.1;
+    double z_cut = 11.9;
+    double xi_endo = 0.6;
+    double xi_epi = 1.02;
+
+    double r_plus = std::sqrt(x * x + y * y + (z - z_cut - d) * (z - z_cut - d));
+    double r_minus = std::sqrt(x * x + y * y + (z - z_cut + d) * (z - z_cut + d));
+
+    double cosh_xi = (r_plus + r_minus) / (2.0 * d);
+    double xi = std::acosh(cosh_xi);
+
+    double depth = (xi - xi_endo) / (xi_epi - xi_endo);
+    depth = (depth < 0) ? 0 : (depth > 1) ? 1 : depth;
+
+
+    return depth;
 }
 
 void
@@ -736,10 +1422,28 @@ OrthotropicSolver::orthothropic_base_at(
     // Let s be the radial vector aligned with the collagen sheet. 
     auto& s = basis[1];
     s[0] = x / r; s[1] = y / r; s[2] = (z / csquared) / r;
+
     // FLAG[GEO] 
-    double corrected_radius = std::sqrt(x * x + y * y + z * z / csquared);
-    double r_over_width = (corrected_radius - MESH_ELLIPSOID_SMALL_RADIUS) / (MESH_ELLIPSOID_LARGE_RADIUS - MESH_ELLIPSOID_SMALL_RADIUS);
-    r_over_width = (r_over_width < 0) ? 0 : (r_over_width > 1) ? 1 : r_over_width;
+    double d = 29.1;
+    double z_cut = 11.9;
+
+    double r_plus = std::sqrt(x * x + y * y + (z - z_cut - d) * (z - z_cut - d));
+    double r_minus = std::sqrt(x * x + y * y + (z - z_cut + d) * (z - z_cut + d));
+
+    double cosh_xi = (r_plus + r_minus) / (2.0 * d);
+    double sinh_xi = std::sqrt(cosh_xi * cosh_xi - 1.0);
+
+    double common = 1.0 / (2.0 * d * sinh_xi);
+    double dxi_dx = common * x * (1.0 / r_plus + 1.0 / r_minus);
+    double dxi_dy = common * y * (1.0 / r_plus + 1.0 / r_minus);
+    double dxi_dz = common * ((z - z_cut - d) / r_plus + (z - z_cut + d) / r_minus);
+
+    double grad_xi_norm = std::sqrt(dxi_dx * dxi_dx + dxi_dy * dxi_dy + dxi_dz * dxi_dz);
+    s[0] = dxi_dx / grad_xi_norm;
+    s[1] = dxi_dy / grad_xi_norm;
+    s[2] = dxi_dz / grad_xi_norm;
+
+    double r_over_width = compute_point_depth(p);
 
     double rads = (r_over_width - 0.5) * (r_over_width - 0.5) * (r_over_width - 0.5) * 8 * 1.03;
     rads = (r_over_width - 0.5) * 2 * 1.03;

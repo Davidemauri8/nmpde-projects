@@ -205,7 +205,7 @@ void NeoHookeSolver::assemble_system() {
           Physics::Elasticity::Kinematics::F(solution_gradient_loc[q]);
       //-------------Computing and
       //caching--------------------------------------------
-      compute_and_cache(Finv, invert(transpose(F), intermediate);
+      compute_and_cache(Finv, invert(transpose(F)), intermediate);
       compute_and_cache(J, determinant(F), intermediate);
       //--------------------------------------------------------------------------------
 

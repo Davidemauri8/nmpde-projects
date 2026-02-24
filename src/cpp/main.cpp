@@ -41,29 +41,108 @@ int main(int argc, char* argv[]) {
 	// Show the name, a reference value and the real value taken as line argument
 #define p(s1, def, s) s
 
-	const std::string save_refined = "generated_meshes/clean_heart_cup.msh";
-	const std::string save_into = "clean_boundary.vtu";
+	const std::string save_refined = "generated_meshes/barbarotta.msh";
 
-	OrthotropicSolver seis(
-		p("Lagrange Basis Degree", 2, (int) vals[0]),
-		p("p_v internal Neumann pressure", 2, vals[1]),
-		p("Robin condition alpha parameter", 1, vals[2]),
-		p("a value", 0.2, vals[3]),
-		p("b value", 4, vals[4]),
-		p("af value", 0.5, vals[5]),
-		p("bf value", 0.5, vals[6]),
-		p("as value", 0.5, vals[7]),
-		p("bs value", 0.5, vals[8]),
-		p("asf value", 0.5, vals[9]),
-		p("bsf value", 0.5, vals[10]),
-		p("Sn value", 0.5, vals[11]),
-		p("beta value", 0.5, vals[12]),
-		p("Bulk penalty", 7, vals[13])
-	);
+	std::vector<double> alphas = { 0.1, 1.0, 0.5, 10.0 };
 
-	seis.setup(save_refined);
+	for (auto alpha : alphas) {
+
+		OrthotropicSolver seis(
+			p("Lagrange Basis Degree", 2, (int)vals[0]),
+			p("p_v internal Neumann pressure", 2, vals[1]),
+			p("Robin condition alpha parameter", 1, alpha),
+			p("a value", 0.2, vals[3]),
+			p("b value", 4, vals[4]),
+			p("af value", 0.5, vals[5]),
+			p("bf value", 0.5, vals[6]),
+			p("as value", 0.5, vals[7]),
+			p("bs value", 0.5, vals[8]),
+			p("asf value", 0.5, vals[9]),
+			p("bsf value", 0.5, vals[10]),
+			p("Sn value", 0.5, vals[11]),
+			p("beta value", 0.5, vals[12]),
+			p("Bulk penalty", 7, vals[13])
+		);
+
+		// Triangulation<3> mesh;
+		/// UtilsMesh::load_mesh_into_tria("rotated.msh", mesh);
+		// UtilsMesh::dump_tria(mesh, "newMesh.vtu");
+		// UtilsMesh::boundary_view_mapping<3>("generated_meshes/barbarotta.msh", "boundaryIdStudy.vtu");
+
+
+		seis.setup(save_refined);
+
+		// Initial internal volume
+
+		seis.compute_internal_volume();
+		seis.compute_external_volume();
+		seis.compute_unperturbed_volume();
+		seis.compute_radius();
+		seis.compute_height();
+
+
+		for (double z = 1; z < 55.0; z += 2.0) {
+			seis.calculate_slice_rotation(z, 1.0);
+		}
+
+		seis.step_pressure(10, 1.3);
+		// seis.compute_strains("StrainOutput.vtk");
+		seis.compute_strains("EndDyastoleStrains.vtk");
+
+		for (double z = 1; z < 55.0; z += 2.0) {
+			seis.calculate_slice_rotation(z, 1.0);
+		}
+	}
+	// seis.contraction();
+	/*
+	seis.contraction();
+
+	for (double z = 1; z < 55.0; z += 2.0) {
+		seis.calculate_slice_rotation(z, 1.0);
+	}
+	*/
+	// seis.contraction();
+	/*
+	
+	for (double z = 1; z < 55.0; z += 2.0) {
+		seis.calculate_slice_rotation(z, 2.0);
+	}
+	seis.step_active(13, 1.0, 0.1);
+	for (double z = 1; z < 55.0; z += 2.0) {
+		seis.calculate_slice_rotation(z, 2.0);
+	}*/
 	// UtilsMesh::boundary_view_mapping<3>(save_refined, save_into);
-	seis.solve("ortho_z_19_ACTIVE_CONTRACTION_2.vtk");
+	/*
+	seis.step_pressure(5, 1.40);
+	seis.compute_strains("StrainOutput.vtk");
+
+
+	seis.compute_strains("InitialStrainOutput.vtk");
+
+	seis.compute_radius();
+	seis.compute_height();
+	seis.compute_internal_volume();
+	seis.compute_external_volume();
+	seis.compute_unperturbed_volume();
+
+	// seis.step_active(5, 1.3, 1.0);
+	seis.step_pressure(40, 13.0);
+
+	for (double z = 1; z < 55.0; z += 2.0) {
+		seis.calculate_slice_rotation(z, 1.0);
+	}
+	seis.step_active(10, 4.0, 0.4);
+
+	seis.compute_radius();
+	seis.compute_height();
+	seis.compute_internal_volume();
+	seis.compute_external_volume();
+	seis.compute_unperturbed_volume();
+
+	for (double z = 1; z < 55.0; z += 2.0) {
+		seis.calculate_slice_rotation(z, 1.0);
+	}
+	*/
 	
 #undef p
 }

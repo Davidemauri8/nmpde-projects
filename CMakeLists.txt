@@ -54,7 +54,7 @@ if (_MESH_PATHS)
     message(STATUS "External mesh list found: ${_MESH_PATHS}")
     set(_MESHES ${_MESH_PATHS})
 else()
-    set(_MESHES "../src/gmesh/heart_cup.geo;../src/gmesh/clean_heart_cup.geo")
+    set(_MESHES "../src/gmesh/heart_cup.geo;../src/gmesh/clean_heart_cup.geo;../src/gmesh/barbarotta.geo;../src/gmesh/mesh.geo")
 endif()
 
 file(MAKE_DIRECTORY "build/generated_meshes")

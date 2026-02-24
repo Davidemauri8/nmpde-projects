@@ -6,9 +6,9 @@
 #define PDE_DIRICHLET	3
 #define PDE_NEUMANN		4
 */
-#define PDE_ROBIN		1
-#define PDE_DIRICHLET	2
-#define PDE_NEUMANN		3
+#define PDE_ROBIN		3
+#define PDE_DIRICHLET	1
+#define PDE_NEUMANN		2
 
 
 #define is_robin(id) (id == PDE_ROBIN)

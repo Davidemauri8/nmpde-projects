@@ -60,13 +60,15 @@ void GuccioneSolver::setup(const std::string &mesh_path) {
                   "  DoFs per cell               = " << fe->dofs_per_cell,
                   RED_COLOR);
 
-    quadrature = std::make_unique<QGauss<dim>>(r + 1);
+    quadrature = std::make_unique<QGaussSimplex<dim>>(r + 1);
+    //quadrature = std::make_unique<QGauss<dim>>(r + 1);
 
     pde_out_c_par(pcout,
-                  "  Quadrature points per cell = " << quadrature->size(),
-                  RED_COLOR);
+        "  Quadrature points per cell = " << quadrature->size(),
+        RED_COLOR);
 
-    quadrature_face = std::make_unique<QGauss<dim - 1>>(fe->degree + 1);
+    quadrature_face = std::make_unique<QGaussSimplex<dim - 1>>(fe->degree + 1);
+    //quadrature_face = std::make_unique<QGauss<dim - 1>>(fe->degree + 1);
 
     pde_out_c_par(pcout,
                   "  Quadrature points per face = " << quadrature_face->size(),

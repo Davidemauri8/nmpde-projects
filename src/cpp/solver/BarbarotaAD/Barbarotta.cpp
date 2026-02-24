@@ -391,9 +391,11 @@ void BarbarottaSolver::assemble_system() {
     std::map<types::global_dof_index, double> boundary_values;
     std::map<types::boundary_id, const Function<dim> *> boundary_functions;
     Functions::ZeroFunction<dim> bc_func;
+
     boundary_functions[PDE_DIRICHLET] = &bc_func;
 
-    VectorTools::interpolate_boundary_values(dof_handler, boundary_functions,
+    VectorTools::interpolate_boundary_values(
+        dof_handler, boundary_functions,
                                              boundary_values);
     MatrixTools::apply_boundary_values(boundary_values, jacobian, step_owned,
                                        nr_rhs_f, true);
@@ -401,35 +403,58 @@ void BarbarottaSolver::assemble_system() {
 }
 
 void BarbarottaSolver::initialize_orth_basis(const dealii::Point<dim> &p) {
+  // Formulation following the procedure described here:
+  // https://pmc.ncbi.nlm.nih.gov/articles/PMC4707707/pdf/rspa20150641.pdf
 
   constexpr double tol = 1e-8;
-  constexpr double eps = 1e-10;
-    
+
   f0.clear();
   n0.clear();
   s0.clear();
 
   //------------defining t---------------
 
-  const double rho_point =
-      std::sqrt((p[0] * p[0] + p[1] * p[1]) / (epi_min * epi_min) +
-                (p[2] * p[2]) / (epi_max * epi_max));
+  auto rs = [&](double t) { return endo_min + (epi_min - endo_min) * t; };
+  auto re = [&](double t) { return endo_max + (epi_max - endo_max) * t; };
 
-  const double rho_endo = endo_min / epi_min;
+  auto g = [&](double t) {
+    const double rs_t = rs(t), rl_t = re(t);
+    return (p[0] * p[0] + p[1] * p[1]) / (rs_t * rs_t) +
+           (p[2] * p[2]) / (rl_t * rl_t) - 1.0;
+  };
 
-  double t = (rho_point - rho_endo) / (1.0 - rho_endo);
-
-  t = std::clamp(t, 0.0, 1.0);
-
+  // Bisection on [0,1]
+  double a = 0.0, b = 1.0;
+  double fa = g(a), fb = g(b);
+  double t = 0;
+  // if point is slightly outside due to numerics, clamp
+  if (fa * fb > 0.0) {
+    // fallback: closest end
+    t = (std::abs(fa) < std::abs(fb)) ? a : b;
+    // use t
+  } else {
+    for (int it = 0; it < 50; ++it) {
+      double m = 0.5 * (a + b);
+      double fm = g(m);
+      if (fa * fm <= 0.0) {
+        b = m;
+        fb = fm;
+      } else {
+        a = m;
+        fa = fm;
+      }
+    }
+    t = 0.5 * (a + b);
+  }
   //--------------------------------------
 
-  const double delta_max = std::abs(endo_max - epi_max);
-  const double delta_min = std::abs(endo_min - epi_min);
+  const double r_s = rs(t);
+  const double r_e = re(t);
 
-  const double r_s = endo_max + delta_max * t;
-  const double r_e = endo_max + delta_min * t;
-
-  const double u = std::acos(p[2] / r_e);
+  // Use atan2 for u (more robust than acos)
+  const double sin_u = std::sqrt(p[0] * p[0] + p[1] * p[1]) / r_s;
+  const double cos_u = p[2] / r_e;
+  const double u = std::atan2(sin_u, cos_u); // gives u in [0,pi]
 
   // Explicit apex handling
   if (std::abs(std::sin(u)) < tol) {
@@ -445,13 +470,10 @@ void BarbarottaSolver::initialize_orth_basis(const dealii::Point<dim> &p) {
     return;
   }
 
-  const double denom = std::max(std::abs(r_s * std::sin(u)), eps);
-  const double v1 = std::asin(p[1] / denom);
-  const double v2 = std::acos(p[0] / denom);
-  const double v = std::isnan(v1) ? v2 : v1;
+  const double v = std::atan2(p[1], p[0]);
 
   // Fiber rotation law
-  const double alpha_deg = 90.0 - 180.0 * t;
+  const double alpha_deg = (90.0 - 180.0 * t) * -1;
   const double alpha = alpha_deg * numbers::PI / 180.0;
 
   // Computing of dxdu and dxdv
@@ -487,6 +509,29 @@ void BarbarottaSolver::initialize_orth_basis(const dealii::Point<dim> &p) {
 
   // Computing s
   s0 = cross_product_3d(n0, f0);
+
+  // After f0 computed:
+  const ADNumber fnorm = std::sqrt(f0 * f0);
+  if (fnorm > 0)
+    f0 /= fnorm;
+
+  // n0 from cross(dxdu,dxdv)
+  const ADNumber nnorm = std::sqrt(n0 * n0);
+  if (nnorm > 0)
+    n0 /= nnorm;
+
+  // s0 = n0 x f0, then normalize
+  s0 = cross_product_3d(n0, f0);
+  const ADNumber snorm = std::sqrt(s0 * s0);
+  if (snorm > 0)
+    s0 /= snorm;
+
+  // (optional) re-orthogonalize f0 to remove drift:
+  f0 = cross_product_3d(s0, n0);
+  const ADNumber fnorm2 = std::sqrt(f0 * f0);
+  if (fnorm2 > 0)
+    f0 /= fnorm2;
+
 
 
 }

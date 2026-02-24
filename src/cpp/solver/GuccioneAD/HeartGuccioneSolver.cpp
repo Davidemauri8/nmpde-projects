@@ -154,7 +154,12 @@ void GuccioneSolver::compute_P_at_q(const Tensor<2, dim, ADNumber> &F_q,
          2.0 * bs0n0 * i.Es0n0 * (i.s0n0 + i.n0s0);
   //------------------------------------------------------------------------
 
-  P = F_q * 0.5 * C * expQ * dQdE;
+   Tensor<2, dim, ADNumber> FinvT = invert(transpose(F_q));
+  ADNumber J = determinant(F_q);
+  Tensor<2, dim, ADNumber> S_vol = bulk * (J - 1.0) * J * FinvT;
+
+
+  P = F_q * 0.5 * C * expQ * dQdE + S_vol;
 }
 
 void GuccioneSolver::assemble_system() {
@@ -342,11 +347,11 @@ void GuccioneSolver::initialize_orth_basis() {
 }
 
 void GuccioneSolver::solve() {
-  SolverControl solver_control(jacobian.m(), 1e-5 * nr_rhs_f.l2_norm());
+  SolverControl solver_control(jacobian.m()*2, 1e-5 * nr_rhs_f.l2_norm());
 
-  // SolverGMRES<TrilinosWrappers::MPI::Vector> solver(solver_control);
-     SolverBicgstab<TrilinosWrappers::MPI::Vector> solver(solver_control);
-  /*
+  //SolverGMRES<TrilinosWrappers::MPI::Vector> solver(solver_control);
+  SolverBicgstab<TrilinosWrappers::MPI::Vector> solver(solver_control);
+  
   TrilinosWrappers::PreconditionAMG preconditioner;
   TrilinosWrappers::PreconditionAMG::AdditionalData data;
 
@@ -359,10 +364,10 @@ void GuccioneSolver::solve() {
   }
   data.elliptic = true;
   preconditioner.initialize(jacobian, data);
-  */
+  
 
-  TrilinosWrappers::PreconditionSSOR preconditioner;
-  preconditioner.initialize(jacobian);
+ // TrilinosWrappers::PreconditionSSOR preconditioner;
+ // preconditioner.initialize(jacobian);
 
   solver.solve(jacobian, step_owned, nr_rhs_f, preconditioner);
 
@@ -373,9 +378,9 @@ void GuccioneSolver::solve() {
 
 void GuccioneSolver::solve_newton(const std::string &output_file_name) {
   pcout << "===============================================" << std::endl;
-#define MAX_ITER_AMT 1000
+#define MAX_ITER_AMT 2000
 
-  const unsigned int n_load_steps = 10; // Number of increments
+  const unsigned int n_load_steps = 15; // Number of increments
   const double target_p_v = p_v.val();  // Save the final targets
 
   // Outer loop for Load Stepping
@@ -417,8 +422,25 @@ void GuccioneSolver::solve_newton(const std::string &output_file_name) {
 
         solve();
 
-        double alpha = (n_iter < 5) ? 0.1 : 1.0;
-
+        double alpha = 1.0 ;
+         if (n_iter < 15) {
+          alpha = 0.1;
+        } else if (n_iter < 35) {
+          alpha = 0.2;
+        } else if (n_iter < 58) {
+          alpha = 0.3;
+        } else if (n_iter < 75) {
+          alpha = 0.4;
+        } else if (n_iter < 100) {
+          alpha = 0.5;
+        } else if (n_iter < 120) {
+          alpha = 0.6;
+        } else if (n_iter < 150) {
+          alpha = 0.7;
+        }else {
+          alpha = 0.8;
+        }
+        
         solution_owned.add(alpha, step_owned);
         constraints.distribute(solution_owned);
         solution = solution_owned;
@@ -443,15 +465,15 @@ void GuccioneSolver::solve_newton(const std::string &output_file_name) {
                 GRN_COLOR);
 
   DataOut<dim> data_out;
-  /*std::vector<DataComponentInterpretation::DataComponentInterpretation>
+  std::vector<DataComponentInterpretation::DataComponentInterpretation>
       data_interpretation(
           dim, DataComponentInterpretation::component_is_part_of_vector);
   std::vector<std::string> name(dim, "solution");
 
-  data_out.add_data_vector(dof_handler, solution, name, data_interpretation);*/
+  data_out.add_data_vector(dof_handler, solution, name, data_interpretation);
   
   // Change into this to plot just the z value
-   data_out.add_data_vector(dof_handler, solution, "solution");
+   //data_out.add_data_vector(dof_handler, solution, "solution");
 
   std::vector<unsigned int> partition_int(mesh.n_active_cells());
   GridTools::get_subdomain_association(mesh, partition_int);

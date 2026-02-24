@@ -107,7 +107,9 @@ protected:
   const double bn0n0 = 1;
   const double C = 10000;
   // Pressure for Neumann
-  ADNumber p_v = 5000;
+  ADNumber p_v = 10000;
+
+  ADNumber bulk = 0;
   //--------------------------
 
   // Piola-Kirchoff

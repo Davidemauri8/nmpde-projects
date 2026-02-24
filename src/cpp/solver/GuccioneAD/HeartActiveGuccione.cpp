@@ -10,6 +10,7 @@
 
 #include <deal.II/numerics/data_out_faces.h>
 
+#include <algorithm>
 #include "../utilities/mesh_io.hpp"
 #include <map>
 
@@ -177,7 +178,7 @@ void GuccioneSolver::compute_P_at_q(const Tensor<2, dim, ADNumber> &F_q,
 
   Tensor<2, dim, ADNumber> S = S_act + S_pass;
 
-  P = F_q*S;
+  P = F_q*S + S_vol;
 }
 
 void GuccioneSolver::assemble_system() {
@@ -246,6 +247,12 @@ void GuccioneSolver::assemble_system() {
       // Computing F and E
       const Tensor<2, dim, ADNumber> F =
           Physics::Elasticity::Kinematics::F(solution_gradient_loc[q]);
+      const ADNumber J = determinant(F);
+      // Debugging print
+      if (q == 0 && cell->is_locally_owned() &&
+          (J.val() < 0.9 || J.val() > 1.2))
+        std::cout << "J=" << J.val() << std::endl;
+
       const Tensor<2, dim, ADNumber> E = Physics::Elasticity::Kinematics::E(F);
 
       //-------------Computing and caching the elements for computing
@@ -359,25 +366,47 @@ void GuccioneSolver::initialize_orth_basis(const dealii::Point<dim> &p) {
 
   //------------defining t---------------
 
-  const double rho_point =
-      std::sqrt((p[0] * p[0] + p[1] * p[1]) / (epi_min * epi_min) +
-                (p[2] * p[2]) / (epi_max * epi_max));
+  auto rs = [&](double t) { return endo_min + (epi_min - endo_min) * t; };
+  auto re = [&](double t) { return endo_max + (epi_max - endo_max) * t; };
 
-  const double rho_endo = endo_min / epi_min;
+  auto g = [&](double t) {
+    const double rs_t = rs(t), rl_t = re(t);
+    return (p[0] * p[0] + p[1] * p[1]) / (rs_t * rs_t) +
+           (p[2] * p[2]) / (rl_t * rl_t) - 1.0;
+  };
 
-  double t = (rho_point - rho_endo) / (1.0 - rho_endo);
-
-  t = std::clamp(t, 0.0, 1.0);
-
+  // Bisection on [0,1]
+  double a = 0.0, b = 1.0;
+  double fa = g(a), fb = g(b);
+  double t = 0;
+  // if point is slightly outside due to numerics, clamp
+  if (fa * fb > 0.0) {
+    // fallback: closest end
+    t = (std::abs(fa) < std::abs(fb)) ? a : b;
+    // use t
+  } else {
+    for (int it = 0; it < 50; ++it) {
+      double m = 0.5 * (a + b);
+      double fm = g(m);
+      if (fa * fm <= 0.0) {
+        b = m;
+        fb = fm;
+      } else {
+        a = m;
+        fa = fm;
+      }
+    }
+    t = 0.5 * (a + b);
+  }
   //--------------------------------------
 
-  const double delta_max = std::abs(endo_max - epi_max);
-  const double delta_min = std::abs(endo_min - epi_min);
+  const double r_s = rs(t);
+  const double r_e = re(t);
 
-  const double r_s = endo_max + delta_max * t;
-  const double r_e = endo_max + delta_min * t;
-
-  const double u = std::acos(p[2] / r_e);
+  // Use atan2 for u (more robust than acos)
+  const double sin_u = std::sqrt(p[0] * p[0] + p[1] * p[1]) / r_s;
+  const double cos_u = p[2] / r_e;
+  const double u = std::atan2(sin_u, cos_u); // gives u in [0,pi]
 
   // Explicit apex handling
   if (std::abs(std::sin(u)) < tol) {
@@ -393,13 +422,10 @@ void GuccioneSolver::initialize_orth_basis(const dealii::Point<dim> &p) {
     return;
   }
 
-  const double denom = std::max(std::abs(r_s * std::sin(u)), eps);
-  const double v1 = std::asin(p[1] / denom);
-  const double v2 = std::acos(p[0] / denom);
-  const double v = std::isnan(v1) ? v2 : v1;
+  const double v = std::atan2(p[1], p[0]);
 
   // Fiber rotation law
-  const double alpha_deg = 90.0 - 180.0 * t;
+  const double alpha_deg = (90.0 - 180.0 * t)*-1;
   const double alpha = alpha_deg * numbers::PI / 180.0;
 
   // Computing of dxdu and dxdv
@@ -435,14 +461,38 @@ void GuccioneSolver::initialize_orth_basis(const dealii::Point<dim> &p) {
 
   // Computing s
   s0 = cross_product_3d(n0, f0);
+
+  // After f0 computed:
+  const ADNumber fnorm = std::sqrt(f0 * f0);
+  if (fnorm > 0)
+    f0 /= fnorm;
+
+  // n0 from cross(dxdu,dxdv)
+  const ADNumber nnorm = std::sqrt(n0 * n0);
+  if (nnorm > 0)
+    n0 /= nnorm;
+
+  // s0 = n0 x f0, then normalize
+  s0 = cross_product_3d(n0, f0);
+  const ADNumber snorm = std::sqrt(s0 * s0);
+  if (snorm > 0)
+    s0 /= snorm;
+
+  // (optional) re-orthogonalize f0 to remove drift:
+  f0 = cross_product_3d(s0, n0);
+  const ADNumber fnorm2 = std::sqrt(f0 * f0);
+  if (fnorm2 > 0)
+    f0 /= fnorm2;
+
+
 }
 
 void GuccioneSolver::solve() {
   SolverControl solver_control(7000, 1e-5 * nr_rhs_f.l2_norm());
 
-  //SolverGMRES<TrilinosWrappers::MPI::Vector> solver(solver_control);
-  SolverBicgstab<TrilinosWrappers::MPI::Vector> solver(solver_control);
-  /*
+  SolverGMRES<TrilinosWrappers::MPI::Vector> solver(solver_control);
+  //SolverBicgstab<TrilinosWrappers::MPI::Vector> solver(solver_control);
+  
   TrilinosWrappers::PreconditionAMG preconditioner;
   TrilinosWrappers::PreconditionAMG::AdditionalData data;
 
@@ -455,10 +505,10 @@ void GuccioneSolver::solve() {
   }
   data.elliptic = true;
   preconditioner.initialize(jacobian, data);
-  */
+  
 
-  TrilinosWrappers::PreconditionSSOR preconditioner;
-  preconditioner.initialize(jacobian);
+  //TrilinosWrappers::PreconditionSSOR preconditioner;
+  //preconditioner.initialize(jacobian);
 
   solver.solve(jacobian, step_owned, nr_rhs_f, preconditioner);
 
@@ -472,7 +522,7 @@ void GuccioneSolver::solve_newton(const std::string &output_file_name) {
 
   #define MAX_ITER_AMT 1000
 
-  const unsigned int n_load_steps = 10; // Number of increments
+  const unsigned int n_load_steps = 15; // Number of increments
   const double target_p_v = p_v.val();  // Save the final targets
   const double target_Ta = T_a.val();
 
@@ -517,7 +567,25 @@ void GuccioneSolver::solve_newton(const std::string &output_file_name) {
 
         solve();
 
-        double alpha = (n_iter < 5) ? 0.1 : 1.0;
+        double alpha = 1.0;
+
+        if (n_iter < 35) {
+          alpha = 0.1;
+        } else if (n_iter < 60) {
+          alpha = 0.2;
+        } else if (n_iter < 80) {
+          alpha = 0.3;
+        } else if (n_iter < 100) {
+          alpha = 0.4;
+        } else if (n_iter < 130) {
+          alpha = 0.5;
+        } else if (n_iter < 170) {
+          alpha = 0.6;
+        } else if (n_iter < 250) {
+          alpha = 0.7;
+        } else {
+          alpha = 0.8;
+        }
 
         solution_owned.add(alpha, step_owned);
         constraints.distribute(solution_owned);

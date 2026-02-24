@@ -114,11 +114,11 @@ protected:
   const ADNumber bs = 10.446;
   const ADNumber asf = 0.13040;
   const ADNumber bsf = 15.255;
-  ADNumber Sn = 5.1;
+  ADNumber Sn = 2;
   const ADNumber beta = 4.1;
   const ADNumber bulk = 5.0;
   // Pressure for Neumann
-  ADNumber p_v = 0.1;
+  ADNumber p_v = 1;
   //--------------------------
 
 

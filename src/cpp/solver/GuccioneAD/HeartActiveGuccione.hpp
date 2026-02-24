@@ -108,21 +108,21 @@ protected:
   const double bn0n0 = 2;    
   const double C = 2000;
   // Pressure for Neumann
-  ADNumber p_v = 1500;
+  ADNumber p_v = 15000;
   // Active component
-  ADNumber T_a = 6000;
+  ADNumber T_a = 60000;
   // Volumetric component
-  ADNumber bulk = 400;
+  ADNumber bulk = 1500000;
   //--------------------------
 
   //----Fiber's parameters-----
   // Parameters taken from :
   // https://pmc.ncbi.nlm.nih.gov/articles/PMC4707707/pdf/rspa20150641.pdf
 
-  const double endo_max = 17.0;
-  const double endo_min = 7.0;
-  const double epi_max = 20.0;
-  const double epi_min = 10.0;
+  const double endo_max = 0.017;
+  const double endo_min = 0.007;
+  const double epi_max = 0.020;
+  const double epi_min = 0.010;
 
   //---------------------------
 
